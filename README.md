@@ -1,4 +1,4 @@
-# ⚔️ Exadiou's Tanoth Companion
+# ⚔️ Exadious Tanoth Companion
 
 A locally hosted, headless Tanoth companion featuring a persistent browser session, a web dashboard, player information, reports, and configurable automation.
 

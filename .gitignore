@@ -1,0 +1,13 @@
+node_modules/
+.browser-profile/
+.player-cache.json
+.daily-stats.json
+.reports.json
+config.json
+npm-debug.log*
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.nyc_output/

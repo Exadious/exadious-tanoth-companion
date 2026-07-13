@@ -1,0 +1,31 @@
+{
+  "serverUrl": "https://s4-de.tanoth.gameforge.com/main/client/",
+  "dashboardHost": "127.0.0.1",
+  "dashboardPort": 3210,
+  "autoStart": true,
+  "uiLocale": "en-EN",
+  "bot": {
+    "server_speed": 2,
+    "priorityAdventure": "gold",
+    "difficulty": "medium",
+    "spendGoldOn": "circle",
+    "priorityAttribute": "MIX",
+    "minGoldToSpend": 0,
+    "useBloodstones": false,
+    "minBloodstonesToSpend": 0,
+    "autoEquipPlayer": false,
+    "autoEquipCompanions": false,
+    "enablePvp": false,
+    "pvpLimitType": "both",
+    "pvpMaxRankDifference": 5,
+    "pvpMaxLevelDifference": 3,
+    "pvpOpponentLevelBelow": 57,
+    "enableDungeon": false,
+    "dungeonUseBloodstones": false,
+    "dungeonMinBloodstones": 0,
+    "autoSell": false,
+    "autoSellRarity": "common",
+    "autoSellMinValue": 0,
+    "autoSellKeepAttributes": []
+  }
+}

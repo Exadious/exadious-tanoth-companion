@@ -24,7 +24,7 @@ npm --version
 Repository klonen und in den Projektordner wechseln:
 
 ```powershell
-git clone https://github.com/DEIN-BENUTZERNAME/exadious-tanoth-companion.git
+git clone https://github.com/Exadious/exadious-tanoth-companion.git
 cd exadious-tanoth-companion
 ```
 

@@ -1,154 +1,166 @@
-# Exadiou's Tanoth Companion
+# ⚔️ Exadiou's Tanoth Companion
 
-Ein lokal laufender, headless Tanoth-Bot mit dauerhaft gespeicherter Browser-Sitzung, Web-Dashboard, Spielerinformationen, Reports und konfigurierbaren Automatisierungen.
+A locally hosted, headless Tanoth companion featuring a persistent browser session, a web dashboard, player information, reports, and configurable automation.
 
-> **Hinweis:** Dieses Projekt ist ein inoffizielles Community-Projekt und steht nicht in Verbindung mit Gameforge oder Tanoth. Die Nutzung erfolgt auf eigene Verantwortung. Prüfe vor der Verwendung die geltenden Spielregeln und Nutzungsbedingungen.
+> [!WARNING]
+> This is an unofficial community project and is not affiliated with Gameforge or Tanoth. Use it at your own risk and review the applicable game rules and terms of service before using it.
 
-## Voraussetzungen
+## ✨ Features
 
-- Windows 10 oder Windows 11
-- [Node.js](https://nodejs.org/) 18 oder neuer (empfohlen: aktuelle LTS-Version)
-- npm (wird zusammen mit Node.js installiert)
-- Ein Tanoth-Konto
-- Internetzugang für die Installation und das Browserspiel
+- Headless Chromium with a reusable local login session
+- Local web dashboard for starting, stopping, and configuring the bot
+- Player, companion, equipment, inventory, and mount information
+- Daily statistics and activity reports
+- Adventure, PvP, dungeon, equipment, and inventory automation
+- English, German, French, and Spanish interface support
 
-Versionen prüfen:
+## 📋 Requirements
+
+- Windows 10 or Windows 11
+- [Node.js](https://nodejs.org/) 18 or newer (the current LTS version is recommended)
+- npm, which is included with Node.js
+- A Tanoth account
+- An internet connection for installation and gameplay
+
+Verify your installed versions:
 
 ```powershell
 node --version
 npm --version
 ```
 
-## Installation
+## 📦 Installation
 
-Repository klonen und in den Projektordner wechseln:
+Clone the repository and enter the project directory:
 
 ```powershell
 git clone https://github.com/Exadious/exadious-tanoth-companion.git
 cd exadious-tanoth-companion
 ```
 
-Abhängigkeiten und Chromium installieren:
+Install the dependencies and Chromium:
 
 ```powershell
 npm install
 npx playwright install chromium
 ```
 
-Beim ersten Start wird aus `config.example.json` automatisch eine lokale `config.json` erzeugt.
+On the first start, the application automatically creates a local `config.json` from `config.example.json`.
 
-## Einmalige Anmeldung
+## 🔐 First-time login
 
-Vor dem ersten Headless-Start muss einmal eine Browser-Sitzung angelegt werden:
+Before running the bot headlessly, create a browser session once:
 
 ```powershell
 npm run login
 ```
 
-1. Im geöffneten Chromium-Fenster bei Tanoth anmelden.
-2. Den gewünschten Server und Charakter öffnen.
-3. Warten, bis der Spielclient vollständig geladen ist.
-4. Im Terminal `Enter` drücken.
+1. Sign in to Tanoth in the Chromium window that opens.
+2. Open your preferred server and character.
+3. Wait until the game client has fully loaded.
+4. Return to the terminal and press `Enter`.
 
-Die Sitzung wird ausschließlich lokal im Ordner `.browser-profile/` gespeichert. Zugangsdaten werden nicht in der Bot-Konfiguration hinterlegt.
+The session is stored only on your computer in `.browser-profile/`. Login credentials are not stored in the bot configuration.
 
-## Bot starten
+## 🚀 Starting the bot
 
 ```powershell
 npm start
 ```
 
-Anschließend das Dashboard im Browser öffnen:
+Open the dashboard in your browser:
 
 <http://127.0.0.1:3210>
 
-Über das Dashboard lassen sich der Bot starten und stoppen, Einstellungen anpassen sowie Spielerinformationen, Tagesstatistiken, Begleiter, Ausrüstung, Inventar und Reports anzeigen.
+The dashboard lets you start and stop the bot, change its settings, and view player information, daily statistics, companions, equipment, inventory, and reports.
 
-Das Terminal muss während des Betriebs geöffnet bleiben. Beenden kannst du den Server mit `Strg+C`.
+Keep the terminal open while the bot is running. Press `Ctrl+C` in the terminal to stop the server.
 
-## Verfügbare Befehle
+## 🧰 Available commands
 
-| Befehl | Beschreibung |
+| Command | Description |
 | --- | --- |
-| `npm run login` | Öffnet Chromium für die manuelle Anmeldung und speichert die Sitzung lokal |
-| `npm start` | Startet Server, Dashboard und den Headless-Browser |
-| `npm run check` | Prüft die JavaScript-Dateien auf Syntaxfehler |
+| `npm run login` | Opens Chromium for manual login and stores the browser session locally |
+| `npm start` | Starts the server, dashboard, and headless browser |
+| `npm run check` | Checks the JavaScript files for syntax errors |
 
-## Konfiguration
+## ⚙️ Configuration
 
-Die lokale Konfiguration befindet sich in `config.json`. Viele Einstellungen können direkt über das Dashboard geändert werden.
+Local settings are stored in `config.json`. Most bot settings can also be changed directly from the dashboard.
 
-Wichtige Basisoptionen:
+Important base options:
 
-| Einstellung | Bedeutung |
+| Setting | Description |
 | --- | --- |
-| `serverUrl` | URL des gewünschten Tanoth-Servers |
-| `dashboardHost` | Lokale Adresse des Dashboards |
-| `dashboardPort` | Port des Dashboards, standardmäßig `3210` |
-| `autoStart` | Startet den Bot automatisch zusammen mit dem Server |
-| `uiLocale` | Sprache von Oberfläche und Spielclient |
+| `serverUrl` | URL of the Tanoth server to use |
+| `dashboardHost` | Local address used by the dashboard |
+| `dashboardPort` | Dashboard port; defaults to `3210` |
+| `autoStart` | Starts the bot automatically when the server starts |
+| `uiLocale` | Controls both the dashboard and game-client language |
 
-Der Bot unterstützt unter anderem Abenteuerpriorität, Schwierigkeitswahl, Gold- und Blutsteinreserven, Attribut- oder Kreisverbesserungen, PvP, Dungeon, automatisches Ausrüsten und den Verkauf von Inventargegenständen.
+Automation options include adventure priority, difficulty, gold and bloodstone reserves, attribute or circle upgrades, PvP, dungeon battles, automatic equipment upgrades, and selling inventory items.
 
-## Unterstützte Sprachen
+## 🌍 Supported languages
 
-- Englisch (`en-EN`, Standard)
-- Deutsch (`de-DE`)
-- Französisch (`fr-FR`)
-- Spanisch (`es-ES`)
+- 🇬🇧 English (`en-EN`, default)
+- 🇩🇪 German (`de-DE`)
+- 🇫🇷 French (`fr-FR`)
+- 🇪🇸 Spanish (`es-ES`)
 
-Die Sprache kann im Dashboard neben den Start-/Stopp-Schaltflächen gewählt werden. Sie steuert zugleich die Sprache des Spielclients.
+Select the language from the dashboard next to the Start and Stop buttons. The selected UI language also controls the game-client language.
 
-## Sitzung abgelaufen
+## 🔄 Expired browser session
 
-Falls das Dashboard eine abgelaufene Browser-Sitzung meldet:
+If the dashboard reports that the browser session has expired:
 
-1. Server mit `Strg+C` beenden.
-2. `npm run login` erneut ausführen.
-3. Anmeldung abschließen und danach `npm start` ausführen.
+1. Stop the server with `Ctrl+C`.
+2. Run `npm run login` again.
+3. Complete the login process, then run `npm start`.
 
-## Datenschutz und GitHub
+## 🛡️ Privacy and GitHub safety
 
-Persönliche Laufzeitdaten sind über `.gitignore` vom Repository ausgeschlossen:
+Personal runtime data is excluded from Git through `.gitignore`:
 
-- `.browser-profile/` – Browser-Sitzung und Cookies
-- `config.json` und `.env*` – lokale Konfiguration und Umgebungsvariablen
-- `.player-cache.json` – Spielerinformationen
-- `.daily-stats.json` – lokale Tagesstatistik
-- `.reports.json` – Kampf- und Spielreports
-- `*.log` – lokale Server- und Fehlerprotokolle
-- `node_modules/` – installierte Abhängigkeiten
+- `.browser-profile/` — browser session and cookies
+- `config.json` and `.env*` — local configuration and environment variables
+- `.player-cache.json` — cached player information
+- `.daily-stats.json` — local daily statistics
+- `.reports.json` — combat and activity reports
+- `*.log` — local server and error logs
+- `node_modules/` — installed dependencies
 
-Diese Dateien dürfen nicht manuell zu Git hinzugefügt oder veröffentlicht werden. Für neue Installationen ist ausschließlich `config.example.json` als Vorlage vorgesehen.
+Do not force-add or publish these files. New installations should use only `config.example.json` as their configuration template.
 
-Vor einem Commit kann der Ausschluss mit folgendem Befehl kontrolliert werden:
+You can verify ignored files before committing:
 
 ```powershell
 git status --short --ignored
 ```
 
-Ignorierte sensible Dateien erscheinen dabei mit `!!`.
+Sensitive ignored files are shown with the `!!` prefix.
 
-## Fehlerbehebung
+## 🩹 Troubleshooting
 
-### Dashboard ist nicht erreichbar
+### The dashboard is unavailable
 
-- Prüfen, ob `npm start` noch läuft.
-- Prüfen, ob Port `3210` bereits von einem anderen Programm verwendet wird.
-- Den in `config.json` eingestellten Port öffnen.
+- Make sure `npm start` is still running.
+- Check whether another application is already using port `3210`.
+- Open the port configured in your local `config.json`.
 
-### Chromium startet nicht
+### Chromium does not start
+
+Install or repair the bundled browser:
 
 ```powershell
 npx playwright install chromium
 ```
 
-### Spielerdaten bleiben leer
+### Player data remains empty
 
-- Die Browser-Sitzung mit `npm run login` erneuern.
-- Sicherstellen, dass der Charakter vollständig geladen wurde.
-- Server anschließend neu starten.
+- Refresh the browser session with `npm run login`.
+- Make sure the character has fully loaded before saving the session.
+- Restart the server afterward.
 
-## Lizenz
+## 📜 License
 
-Vor einer öffentlichen Veröffentlichung sollte eine passende Lizenzdatei ergänzt werden. Ohne ausdrückliche Lizenz bleiben alle Rechte beim Urheber.
+No license has been granted yet. Unless a license file is added, all rights remain with the copyright holder.

@@ -15,14 +15,53 @@ const indexHtml = fs.readFileSync(path.join(root, 'public', 'index.html'));
 const logoImage = fs.readFileSync(path.join(root, 'public', 'exadious-logo.png'));
 const botSource = fs.readFileSync(path.join(root, 'Tanoth.js'), 'utf8');
 const supportedLocales = ['de-DE', 'en-EN', 'fr-FR', 'es-ES'];
+const discordNotificationBooleanKeys = new Set([
+  'botLifecycle', 'sessionWarnings', 'errors', 'adventures', 'pvp', 'dungeons', 'work',
+  'levelUp', 'potionExpired', 'mountChanged', 'bloodstonesSpent', 'resourceWarnings',
+  'inventoryWarnings', 'itemsSold', 'equipmentPlayer', 'equipmentCompanions',
+  'guildDonations', 'guildUpgrades', 'guildMembers', 'quietHoursEnabled'
+]);
+const defaultDiscordNotifications = {
+  botLifecycle: false, sessionWarnings: false, errors: false,
+  adventures: false, pvp: false, dungeons: false, work: false,
+  levelUp: false, potionExpired: false, mountChanged: false, bloodstonesSpent: false,
+  resourceWarnings: false, inventoryWarnings: false, itemsSold: false,
+  equipmentPlayer: false, equipmentCompanions: false,
+  guildDonations: false, guildUpgrades: false, guildMembers: false,
+  lowGoldThreshold: 0, lowBloodstonesThreshold: 0, inventoryWarningPercent: 90,
+  quietHoursEnabled: false, quietHoursStart: 22, quietHoursEnd: 7
+};
+function isDiscordNotifications(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.entries(value).every(([key, setting]) => {
+    if (discordNotificationBooleanKeys.has(key)) return typeof setting === 'boolean';
+    if (['lowGoldThreshold', 'lowBloodstonesThreshold'].includes(key)) return Number.isInteger(setting) && setting >= 0;
+    if (key === 'inventoryWarningPercent') return Number.isInteger(setting) && setting >= 1 && setting <= 100;
+    if (['quietHoursStart', 'quietHoursEnd'].includes(key)) return Number.isInteger(setting) && setting >= 0 && setting <= 23;
+    return false;
+  });
+}
 if (!supportedLocales.includes(config.uiLocale)) config.uiLocale = 'en-EN';
+config.bot.discordNotifications = { ...defaultDiscordNotifications, ...(config.bot.discordNotifications || {}) };
 let cachedPlayer = {};
 try { cachedPlayer = JSON.parse(fs.readFileSync(playerCachePath, 'utf8')); } catch {}
 const currentDayKey = () => {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
-const emptyDailyStats = () => ({ goldCollected: 0, experienceGained: 0, adventuresCompleted: 0, bloodstonesSpent: 0, attributesBought: 0, circleItemsBought: 0, errors: 0, runtimeMs: 0 });
+const emptyDailyStats = () => ({
+  goldCollected: 0, goldSpent: 0, experienceGained: 0, adventuresCompleted: 0,
+  freeAdventures: 0, bloodstoneAdventures: 0, bloodstonesSpent: 0,
+  attributesBought: 0, attributeStrength: 0, attributeDexterity: 0,
+  attributeConstitution: 0, attributeIntelligence: 0, circleItemsBought: 0,
+  pvpWins: 0, pvpLosses: 0, fameGained: 0, fameLost: 0,
+  dungeonWins: 0, dungeonLosses: 0, freeDungeonAttempts: 0, bloodstoneDungeonAttempts: 0,
+  workSessions: 0, workHours: 0, workGold: 0,
+  itemsSold: 0, saleGold: 0, playerItemsEquipped: 0, companionItemsEquipped: 0,
+  guildGoldDonated: 0, guildUpgradeGoldSpent: 0, guildUpgradesBought: 0,
+  pauses: 0, pauseDurationMs: 0, sessionDisconnects: 0, reconnections: 0,
+  successfulActions: 0, lastSuccessfulAction: '', errors: 0, runtimeMs: 0
+});
 let savedReports = { combat: null, adventure: null, dungeon: null, work: null };
 try { savedReports = { ...savedReports, ...JSON.parse(fs.readFileSync(reportsPath, 'utf8')) }; } catch {}
 let dailyStore = { date: currentDayKey(), stats: emptyDailyStats(), samples: { gold: null, bloodstones: null, experience: null, adventures: null } };
@@ -42,6 +81,11 @@ const allowedBotSettings = {
   minBloodstonesToSpend: value => Number.isInteger(value) && value >= 0,
   autoEquipPlayer: value => typeof value === 'boolean',
   autoEquipCompanions: value => typeof value === 'boolean',
+  autoEquipPlayerPriorities: value => Array.isArray(value) && value.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute)),
+  autoEquipPlayerMaxMalus: value => Number.isInteger(value) && value >= 0,
+  autoEquipCompanionPriorities: value => Array.isArray(value) && value.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute)),
+  autoEquipCompanionMaxMalus: value => Number.isInteger(value) && value >= 0,
+  autoEquipCompanionProfiles: value => value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([id, profile]) => /^\d+$/.test(id) && profile && Array.isArray(profile.priorities) && profile.priorities.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute)) && Number.isInteger(profile.maxMalus) && profile.maxMalus >= 0),
   enablePvp: value => typeof value === 'boolean',
   pvpLimitType: value => ['rank', 'level', 'both'].includes(value),
   pvpMaxRankDifference: value => Number.isInteger(value) && value >= 0,
@@ -50,10 +94,22 @@ const allowedBotSettings = {
   enableDungeon: value => typeof value === 'boolean',
   dungeonUseBloodstones: value => typeof value === 'boolean',
   dungeonMinBloodstones: value => Number.isInteger(value) && value >= 0,
+  enableWork: value => typeof value === 'boolean',
+  workHours: value => Number.isInteger(value) && value >= 1 && value <= 8,
   autoSell: value => typeof value === 'boolean',
   autoSellRarity: value => ['common', 'non_unique', 'all'].includes(value),
   autoSellMinValue: value => Number.isInteger(value) && value >= 0,
-  autoSellKeepAttributes: value => Array.isArray(value) && value.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute))
+  autoSellKeepAttributes: value => Array.isArray(value) && value.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute)),
+  discordDailyStatsEnabled: value => typeof value === 'boolean',
+  discordWebhookUrl: value => typeof value === 'string' && (value === '' || isDiscordWebhookUrl(value)),
+  discordNotifications: isDiscordNotifications,
+  guildAutoDonateGold: value => typeof value === 'boolean',
+  guildDonationAmount: value => Number.isInteger(value) && value >= 0,
+  guildMinPlayerGold: value => Number.isInteger(value) && value >= 0,
+  guildDonationDailyLimit: value => Number.isInteger(value) && value >= 0,
+  guildAutoUpgrade: value => typeof value === 'boolean',
+  guildUpgradePriorities: value => Array.isArray(value) && value.length <= 5 && new Set(value).size === value.length && value.every(feature => ['fort', 'treasury', 'wall', 'banner', 'watchtower'].includes(feature)),
+  guildUpgradeDailyGoldLimit: value => Number.isInteger(value) && value >= 0
 };
 
 const state = {
@@ -68,6 +124,8 @@ let lastStatsTick = Date.now();
 let context;
 let page;
 let botFrame;
+let discordSendChain = Promise.resolve();
+const discordNotificationDedup = new Map();
 
 async function applyGameLocale(locale) {
   if (!supportedLocales.includes(locale) || !botFrame) return;
@@ -91,6 +149,12 @@ async function applyGameLocale(locale) {
 
 function update(patch) {
   const now = Date.now();
+  const previousMode = state.mode;
+  const previous = {
+    mode: state.mode, message: state.message, gold: state.gold, bloodstones: state.bloodstones,
+    player: state.player, reports: state.reports
+  };
+  const statsEvent = patch.statsEvent ? { ...patch.statsEvent } : null;
   if (dailyStore.date !== currentDayKey()) {
     dailyStore = { date: currentDayKey(), stats: emptyDailyStats(), samples: { gold: null, bloodstones: null, experience: null, adventures: null } };
     state.dailyStats = dailyStore.stats;
@@ -100,7 +164,9 @@ function update(patch) {
   lastStatsTick = now;
   if (patch.statsEvent) {
     for (const [key, amount] of Object.entries(patch.statsEvent)) {
-      if (key in state.dailyStats && Number.isFinite(amount)) state.dailyStats[key] += amount;
+      if (!(key in state.dailyStats)) continue;
+      if (key === 'lastSuccessfulAction' && typeof amount === 'string') state.dailyStats[key] = amount;
+      else if (Number.isFinite(amount)) state.dailyStats[key] += amount;
     }
     patch = { ...patch };
     delete patch.statsEvent;
@@ -125,6 +191,8 @@ function update(patch) {
     patch = { ...patch, reports: { ...state.reports, ...patch.reports } };
     fs.writeFileSync(reportsPath, `${JSON.stringify(patch.reports, null, 2)}\n`, 'utf8');
   }
+  if (patch.mode === 'offline' && ['online', 'collecting'].includes(previousMode)) state.dailyStats.sessionDisconnects += 1;
+  if (['online', 'collecting'].includes(patch.mode) && previousMode === 'offline') state.dailyStats.reconnections += 1;
   Object.assign(state, patch, { updatedAt: new Date().toISOString() });
   const samples = { gold: state.gold, bloodstones: state.bloodstones, experience: state.player?.experience, adventures: state.player?.adventuresMade };
   if (Number.isFinite(samples.gold) && Number.isFinite(statBaseline.gold) && samples.gold > statBaseline.gold) state.dailyStats.goldCollected += samples.gold - statBaseline.gold;
@@ -139,6 +207,7 @@ function update(patch) {
   dailyStore.stats = state.dailyStats;
   dailyStore.samples = statBaseline;
   fs.writeFileSync(dailyStatsPath, `${JSON.stringify(dailyStore, null, 2)}\n`, 'utf8');
+  detectDiscordNotifications(previous, state, { ...patch, statsEvent });
 }
 
 function log(message) {
@@ -149,6 +218,9 @@ function log(message) {
   if (/\b(error|fehler|exception|failed)\b/i.test(message) && !/no_valid_session/i.test(message)) state.dailyStats.errors += 1;
   dailyStore.stats = state.dailyStats;
   fs.writeFileSync(dailyStatsPath, `${JSON.stringify(dailyStore, null, 2)}\n`, 'utf8');
+  if (/\b(error|fehler|exception|failed)\b/i.test(message) && !/Discord-|no_valid_session/i.test(message)) {
+    queueDiscordNotification({ key: 'errors', category: 'System', title: 'Bot-Fehler', description: message, color: 0xe6a23c, critical: true });
+  }
 }
 
 setInterval(() => {
@@ -159,6 +231,215 @@ setInterval(() => {
   dailyStore.samples = statBaseline;
   fs.writeFileSync(dailyStatsPath, `${JSON.stringify(dailyStore, null, 2)}\n`, 'utf8');
 }, 5000);
+
+function isDiscordWebhookUrl(value) {
+  try {
+    const url = new URL(value);
+    const allowedHosts = new Set(['discord.com', 'discordapp.com', 'canary.discord.com', 'ptb.discord.com']);
+    return url.protocol === 'https:' && allowedHosts.has(url.hostname) && /^\/api\/webhooks\/\d+\/[A-Za-z0-9._-]+$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function discordSetting(key) {
+  return Boolean(config.bot.discordNotifications?.[key]);
+}
+
+function isDiscordQuietTime() {
+  const settings = config.bot.discordNotifications || defaultDiscordNotifications;
+  if (!settings.quietHoursEnabled) return false;
+  const hour = new Date().getHours();
+  const start = Number(settings.quietHoursStart);
+  const end = Number(settings.quietHoursEnd);
+  return start === end ? true : start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+function queueDiscordNotification(event) {
+  const webhookUrl = String(config.bot.discordWebhookUrl || '').trim();
+  if (!event?.key || !discordSetting(event.key) || !isDiscordWebhookUrl(webhookUrl)) return;
+  if (!event.critical && isDiscordQuietTime()) return;
+  const signature = `${event.key}:${event.signature || event.title}:${event.description || ''}`;
+  const now = Date.now();
+  if (now - (discordNotificationDedup.get(signature) || 0) < 30000) return;
+  discordNotificationDedup.set(signature, now);
+  const payload = {
+    username: "Exadious Tanoth Companion",
+    embeds: [{
+      author: { name: event.category || 'Bot' },
+      title: event.title,
+      description: event.description || undefined,
+      color: event.color || 0xb52f41,
+      fields: (event.fields || []).map(field => ({ name: field.name, value: String(field.value), inline: Boolean(field.inline) })),
+      footer: { text: state.player?.name || 'Tanoth Companion' },
+      timestamp: new Date().toISOString()
+    }]
+  };
+  discordSendChain = discordSendChain.then(async () => {
+    const response = await fetch(webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    log(`Discord-Benachrichtigung gesendet: ${event.category || 'Bot'} – ${event.title}`);
+  }).catch(error => console.error(`Discord-Ereignis konnte nicht gesendet werden: ${error.message}`));
+}
+
+const discordField = (name, value, inline = true) => ({ name, value: value ?? '–', inline });
+const reportSignature = report => report?.timestamp || JSON.stringify(report || null);
+const potionNames = player => new Set((Array.isArray(player?.potions) ? player.potions : []).map(potion => potion?.name).filter(Boolean));
+const guildMemberNames = player => new Set((Array.isArray(player?.guildDetails?.members) ? player.guildDetails.members : []).map(member => member?.name).filter(Boolean));
+
+function detectDiscordNotifications(previous, current, patch) {
+  const previousPlayer = previous.player || {};
+  const player = current.player || {};
+  const event = patch.statsEvent || {};
+  if (previous.mode !== current.mode) {
+    if (current.mode === 'deactivated') queueDiscordNotification({ key: 'botLifecycle', category: 'System', title: 'Bot gestoppt', description: current.message, color: 0x8b949e });
+    else if (current.mode === 'collecting' && previous.mode !== 'collecting') queueDiscordNotification({ key: 'botLifecycle', category: 'System', title: 'Bot gestartet', description: 'Die Automatisierung ist aktiv.', color: 0x43b581 });
+    else if (current.mode === 'offline') queueDiscordNotification({ key: 'sessionWarnings', category: 'System', title: 'Verbindung oder Sitzung unterbrochen', description: current.message, color: 0xed4245, critical: true });
+    else if (previous.mode === 'offline' && ['online', 'collecting'].includes(current.mode)) queueDiscordNotification({ key: 'sessionWarnings', category: 'System', title: 'Verbindung wiederhergestellt', description: current.message, color: 0x43b581, critical: true });
+  }
+  if (current.mode === 'offline' && previous.message !== current.message && /Sitzung abgelaufen/i.test(current.message || '')) {
+    queueDiscordNotification({ key: 'sessionWarnings', category: 'System', title: 'Browser-Sitzung abgelaufen', description: current.message, color: 0xed4245, critical: true });
+  }
+  if (Number.isFinite(previousPlayer.level) && Number(player.level) > Number(previousPlayer.level)) {
+    queueDiscordNotification({ key: 'levelUp', category: 'Spieler', title: `Level ${player.level} erreicht`, description: `${player.name || 'Der Spieler'} ist aufgestiegen.`, color: 0xf1c40f });
+  }
+  if (previousPlayer.mount && player.mount && previousPlayer.mount !== player.mount) {
+    queueDiscordNotification({ key: 'mountChanged', category: 'Spieler', title: 'Reittier gewechselt', fields: [discordField('Vorher', previousPlayer.mount), discordField('Jetzt', player.mount)], color: 0x9b59b6 });
+  }
+  const oldPotions = potionNames(previousPlayer);
+  const newPotions = potionNames(player);
+  for (const potion of oldPotions) if (!newPotions.has(potion)) queueDiscordNotification({ key: 'potionExpired', category: 'Spieler', title: 'Trank abgelaufen', description: potion, signature: potion, color: 0x9b59b6 });
+
+  const oldInventoryPercent = Number(previousPlayer.inventorySlots) > 0 ? Number(previousPlayer.inventoryOccupied) / Number(previousPlayer.inventorySlots) * 100 : 0;
+  const inventoryPercent = Number(player.inventorySlots) > 0 ? Number(player.inventoryOccupied) / Number(player.inventorySlots) * 100 : 0;
+  const warningPercent = Number(config.bot.discordNotifications?.inventoryWarningPercent || 90);
+  if (inventoryPercent >= warningPercent && oldInventoryPercent < warningPercent) {
+    queueDiscordNotification({ key: 'inventoryWarnings', category: 'Ausrüstung & Inventar', title: inventoryPercent >= 100 ? 'Inventar vollständig belegt' : 'Inventar wird knapp', description: `${player.inventoryOccupied} / ${player.inventorySlots} Plätze belegt (${Math.round(inventoryPercent)} %).`, color: inventoryPercent >= 100 ? 0xed4245 : 0xe6a23c });
+  }
+  const goldThreshold = Number(config.bot.discordNotifications?.lowGoldThreshold || 0);
+  const bloodstoneThreshold = Number(config.bot.discordNotifications?.lowBloodstonesThreshold || 0);
+  if (goldThreshold > 0 && Number.isFinite(previous.gold) && previous.gold >= goldThreshold && current.gold < goldThreshold) queueDiscordNotification({ key: 'resourceWarnings', category: 'Ressourcen', title: 'Goldreserve unterschritten', description: `${formatInteger(current.gold)} Gold verbleiben.`, color: 0xe6a23c });
+  if (bloodstoneThreshold > 0 && Number.isFinite(previous.bloodstones) && previous.bloodstones >= bloodstoneThreshold && current.bloodstones < bloodstoneThreshold) queueDiscordNotification({ key: 'resourceWarnings', category: 'Ressourcen', title: 'Blutsteinreserve unterschritten', description: `${formatInteger(current.bloodstones)} Blutsteine verbleiben.`, color: 0xe6a23c });
+  if (Number.isFinite(previous.bloodstones) && Number(current.bloodstones) < Number(previous.bloodstones)) queueDiscordNotification({ key: 'bloodstonesSpent', category: 'Ressourcen', title: 'Blutsteine ausgegeben', fields: [discordField('Ausgegeben', previous.bloodstones - current.bloodstones), discordField('Verbleibend', current.bloodstones)], color: 0xc039d3 });
+
+  const reportEvents = [
+    ['combat', 'pvp', 'Kampf', 'PvP-Kampf abgeschlossen'],
+    ['adventure', 'adventures', 'Abenteuer', 'Abenteuer abgeschlossen'],
+    ['dungeon', 'dungeons', 'Dungeon', 'Dungeonkampf abgeschlossen']
+  ];
+  for (const [reportKey, settingKey, category, title] of reportEvents) {
+    const report = current.reports?.[reportKey];
+    if (!report || reportSignature(report) === reportSignature(previous.reports?.[reportKey])) continue;
+    const fields = reportKey === 'adventure'
+      ? [discordField('Gold', `+${formatInteger(report.goldGained)}`), discordField('Erfahrung', `+${formatInteger(report.experienceGained)}`), discordField('Blutsteine', `−${formatInteger(report.bloodstonesSpent)}`)]
+      : [discordField('Gegner', report.opponentName || 'Unbekannt'), discordField('Level', report.opponentLevel ?? report.dungeonLevel ?? '–'), discordField('Ergebnis', report.victory ? 'Sieg' : 'Niederlage'), discordField('Gold', `${Number(report.goldChange) >= 0 ? '+' : ''}${formatInteger(report.goldChange)}`), discordField('Erfahrung', `${Number(report.experienceChange) >= 0 ? '+' : ''}${formatInteger(report.experienceChange)}`)];
+    queueDiscordNotification({ key: settingKey, category, title, fields, signature: reportSignature(report), color: report.victory === false ? 0xed4245 : 0x43b581 });
+  }
+  if (event.workSessions > 0) queueDiscordNotification({ key: 'work', category: 'Arbeit', title: 'Arbeit begonnen', description: `${formatInteger(event.workHours)} Stunde(n), Ende ${player.taskEndAt ? new Date(player.taskEndAt).toLocaleTimeString('de-DE') : 'unbekannt'}.`, color: 0x3498db });
+  if (event.workGold > 0) queueDiscordNotification({ key: 'work', category: 'Arbeit', title: 'Arbeit abgeschlossen', description: `+${formatInteger(event.workGold)} Gold`, color: 0x43b581 });
+  if (event.itemsSold > 0) queueDiscordNotification({ key: 'itemsSold', category: 'Ausrüstung & Inventar', title: 'Gegenstand verkauft', description: `+${formatInteger(event.saleGold)} Gold`, color: 0x43b581 });
+  if (event.playerItemsEquipped > 0) queueDiscordNotification({ key: 'equipmentPlayer', category: 'Ausrüstung & Inventar', title: 'Spielerausrüstung verbessert', description: event.lastSuccessfulAction || 'Ein besserer Gegenstand wurde ausgerüstet.', color: 0x3498db });
+  if (event.companionItemsEquipped > 0) queueDiscordNotification({ key: 'equipmentCompanions', category: 'Ausrüstung & Inventar', title: 'Begleiterausrüstung verbessert', description: event.lastSuccessfulAction || 'Ein besserer Gegenstand wurde ausgerüstet.', color: 0x3498db });
+  if (event.guildGoldDonated > 0) queueDiscordNotification({ key: 'guildDonations', category: 'Gilde', title: 'Gold gespendet', description: `${formatInteger(event.guildGoldDonated)} Gold wurden an ${player.guild || 'die Gilde'} gespendet.`, color: 0xf1c40f });
+  if (event.guildUpgradesBought > 0) queueDiscordNotification({ key: 'guildUpgrades', category: 'Gilde', title: 'Gildenausbau verbessert', description: `${event.lastSuccessfulAction || 'Ein Gebäude wurde verbessert.'} (−${formatInteger(event.guildUpgradeGoldSpent)} Gold)`, color: 0xf1c40f });
+
+  if (previousPlayer.guildDetails && player.guildDetails) {
+    const oldMembers = guildMemberNames(previousPlayer);
+    const members = guildMemberNames(player);
+    for (const name of members) if (!oldMembers.has(name)) queueDiscordNotification({ key: 'guildMembers', category: 'Gilde', title: 'Mitglied beigetreten', description: name, signature: `joined:${name}`, color: 0x43b581 });
+    for (const name of oldMembers) if (!members.has(name)) queueDiscordNotification({ key: 'guildMembers', category: 'Gilde', title: 'Mitglied ausgetreten', description: name, signature: `left:${name}`, color: 0xed4245 });
+  }
+}
+
+const formatInteger = value => new Intl.NumberFormat('de-DE').format(Number(value) || 0);
+const formatDuration = milliseconds => {
+  const totalMinutes = Math.max(0, Math.round((Number(milliseconds) || 0) / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours} Std. ${minutes} Min.`;
+};
+
+function buildDiscordDailyStatsPayload(test = false) {
+  const stats = state.dailyStats || emptyDailyStats();
+  const pvpTotal = Number(stats.pvpWins || 0) + Number(stats.pvpLosses || 0);
+  const netGold = Number(stats.goldCollected || 0) - Number(stats.goldSpent || 0);
+  const pvpRate = pvpTotal ? Math.round(Number(stats.pvpWins || 0) / pvpTotal * 100) : 0;
+  const signed = value => `${Number(value) >= 0 ? '+' : '−'}${formatInteger(Math.abs(Number(value) || 0))}`;
+  const block = lines => `\`\`\`\n${lines.join('\n')}\n\`\`\``;
+  const field = (name, lines) => ({ name, value: block(lines), inline: false });
+  return {
+    username: "Exadious Tanoth Companion",
+    embeds: [{
+      title: test ? '🧪 Test der Tagesstatistik' : '📊 Tagesstatistik des Bots',
+      description: `**${state.player?.name || 'Tanoth-Spieler'}** · Stand ${new Date().toLocaleString('de-DE', { timeZone: 'Europe/Berlin' })}`,
+      color: 0xb52f41,
+      fields: [
+        field('💰 Bilanz', [
+          `Einnahmen   +${formatInteger(stats.goldCollected)} Gold`,
+          `Ausgaben    −${formatInteger(stats.goldSpent)} Gold`,
+          `Netto       ${signed(netGold)} Gold`,
+          `Erfahrung   +${formatInteger(stats.experienceGained)} EP`,
+          `Blutsteine  −${formatInteger(stats.bloodstonesSpent)}`
+        ]),
+        field('⚔️ Abenteuer & Kämpfe', [
+          `Abenteuer   ${formatInteger(stats.adventuresCompleted)} gesamt | ${formatInteger(stats.freeAdventures)} frei | ${formatInteger(stats.bloodstoneAdventures)} BS`,
+          `PvP         ${formatInteger(stats.pvpWins)} Siege | ${formatInteger(stats.pvpLosses)} Niederl. | ${pvpRate} %`,
+          `Dungeon     ${formatInteger(stats.dungeonWins)} Siege | ${formatInteger(stats.dungeonLosses)} Niederl.`,
+          `Ruhm        +${formatInteger(stats.fameGained)} | −${formatInteger(stats.fameLost)}`
+        ]),
+        field('🛠️ Arbeit & Verkauf', [
+          `Arbeit      ${formatInteger(stats.workSessions)} Einsätze | ${formatInteger(stats.workHours)} Std. | +${formatInteger(stats.workGold)} Gold`,
+          `Verkauf     ${formatInteger(stats.itemsSold)} Items | +${formatInteger(stats.saleGold)} Gold`
+        ]),
+        field('📈 Verbesserungen', [
+          `Attribute   ${formatInteger(stats.attributesBought)} | STR ${formatInteger(stats.attributeStrength)} | GES ${formatInteger(stats.attributeDexterity)}`,
+          `            KON ${formatInteger(stats.attributeConstitution)} | INT ${formatInteger(stats.attributeIntelligence)}`,
+          `Kreis       ${formatInteger(stats.circleItemsBought)} Gegenstände`,
+          `Ausrüstung  ${formatInteger(stats.playerItemsEquipped)} Spieler | ${formatInteger(stats.companionItemsEquipped)} Begleiter`
+        ]),
+        field('⚙️ Botbetrieb', [
+          `Laufzeit    ${formatDuration(stats.runtimeMs)}`,
+          `Pausen      ${formatInteger(stats.pauses)} | ${formatDuration(stats.pauseDurationMs)}`,
+          `Aktionen    ${formatInteger(stats.successfulActions)}`,
+          `Fehler      ${formatInteger(stats.errors)}`
+        ]),
+        { name: '✅ Letzte erfolgreiche Aktion', value: `> ${stats.lastSuccessfulAction || 'Keine'}`, inline: false }
+      ],
+      footer: { text: `${currentDayKey()} · Täglicher Versand um 12:00 Uhr` },
+      timestamp: new Date().toISOString()
+    }]
+  };
+}
+
+async function sendDiscordDailyStats({ test = false } = {}) {
+  const webhookUrl = String(config.bot.discordWebhookUrl || '').trim();
+  if (!isDiscordWebhookUrl(webhookUrl)) throw new Error('Keine gültige Discord-Webhook-URL konfiguriert');
+  const response = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(buildDiscordDailyStatsPayload(test))
+  });
+  if (!response.ok) throw new Error(`Discord antwortete mit HTTP ${response.status}`);
+  log(test ? 'Discord-Teststatistik wurde gesendet' : 'Discord-Tagesstatistik wurde gesendet');
+}
+
+let discordDailyStatsTimer;
+function scheduleDiscordDailyStats() {
+  clearTimeout(discordDailyStatsTimer);
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(12, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  discordDailyStatsTimer = setTimeout(async () => {
+    try {
+      if (config.bot.discordDailyStatsEnabled) await sendDiscordDailyStats();
+    } catch (error) {
+      log(`Discord-Tagesstatistik fehlgeschlagen: ${error.message}`);
+    } finally {
+      scheduleDiscordDailyStats();
+    }
+  }, Math.max(1000, next.getTime() - now.getTime()));
+}
 
 function isHiddenBrowserMessage(message) {
   return [
@@ -201,6 +482,7 @@ async function ensureBrowser() {
     viewport: { width: 1280, height: 900 }
   });
   await context.exposeFunction('__tanothStatus', payload => update(payload));
+  await context.exposeFunction('__tanothGetDailyStats', () => ({ ...state.dailyStats }));
   const wirePage = currentPage => {
     currentPage.on('console', msg => {
       const message = msg.text();
@@ -391,7 +673,11 @@ async function saveBotSettings(input) {
   for (const [key, value] of Object.entries(input)) {
     if (!allowedBotSettings[key](value)) throw new Error(`Ungültiger Wert für ${key}`);
   }
-  config.bot = { ...config.bot, ...input };
+  const nextBotConfig = { ...config.bot, ...input };
+  if (nextBotConfig.discordDailyStatsEnabled && !isDiscordWebhookUrl(nextBotConfig.discordWebhookUrl)) {
+    throw new Error('Für den Discord-Versand wird eine gültige Webhook-URL benötigt');
+  }
+  config.bot = nextBotConfig;
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
   if (botFrame) {
     await botFrame.evaluate(settings => {
@@ -447,6 +733,30 @@ const server = http.createServer(async (req, res) => {
     await stopBot();
     res.writeHead(200); return res.end();
   }
+  if (req.method === 'POST' && req.url === '/api/sell-inventory') {
+    try {
+      if (!botFrame) throw new Error('Bot und Spielsitzung müssen aktiv sein');
+      const result = await botFrame.evaluate(async () => {
+        if (typeof window.sellAllInventoryItems !== 'function') throw new Error('Verkaufsroutine ist nicht geladen');
+        return window.sellAllInventoryItems();
+      });
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ error: error.message }));
+    }
+  }
+  if (req.method === 'POST' && req.url === '/api/discord/test') {
+    try {
+      await sendDiscordDailyStats({ test: true });
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ sent: true }));
+    } catch (error) {
+      res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ error: error.message }));
+    }
+  }
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(indexHtml);
@@ -469,10 +779,12 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.dashboardPort, config.dashboardHost, () => {
   log(`Dashboard: http://${config.dashboardHost}:${config.dashboardPort}`);
+  scheduleDiscordDailyStats();
   if (config.autoStart) startBot();
 });
 
 async function shutdown() {
+  clearTimeout(discordDailyStatsTimer);
   await stopBot();
   if (context) await context.close();
   server.close(() => process.exit(0));

@@ -14,6 +14,48 @@ A locally hosted, headless Tanoth companion featuring a persistent browser sessi
 - Adventure, PvP, dungeon, equipment, and inventory automation
 - English, German, French, and Spanish interface support
 
+## What the bot can do
+
+Exadious Tanoth Companion is a headless automation tool for Tanoth with a persistent browser session and a local web dashboard.
+
+### Automation
+
+- Select and complete adventures based on gold or experience priority.
+- Respect configured difficulty, gold reserve, and bloodstone reserve settings.
+- Perform PvP battles against configurable lower-level opponents.
+- Complete free dungeon and map battles, with optional protected bloodstone usage.
+- Schedule work from the configured duration so it finishes at midnight.
+- Detect existing tasks after a restart and wait for them instead of starting duplicate actions.
+- Upgrade player attributes or purchase summoning-circle items.
+- Equip better items for the player and each companion according to individual attribute priorities.
+- Sell selected inventory items based on rarity, value, and protected attributes.
+- Donate gold to the guild while preserving a configurable player reserve.
+- Purchase gold-only guild upgrades with configurable priorities and daily limits.
+
+### Dashboard and reports
+
+- Display player attributes, resources, ranks, fame, guild, mount, potions, equipment, and inventory.
+- Display companion attributes and equipment.
+- Show guild members, bonuses, upgrade levels, and recent activity.
+- Keep daily bot statistics for the current day across bot and server restarts.
+- Show reports for the latest PvP battle, adventure, dungeon battle, and work session.
+- Display the active task, remaining duration, and expected completion time.
+- Organize bot settings, reports, companions, guild information, statistics, and logs in collapsible sections.
+
+### Discord notifications
+
+- Send a scheduled daily statistics report.
+- Report bot starts, stops, expired sessions, connection changes, and critical errors.
+- Send adventure, PvP, dungeon, and work results.
+- Report inventory, equipment, resource, player, and guild events.
+- Support configurable warning thresholds and quiet hours.
+
+### Languages and privacy
+
+The dashboard supports German, English, French, and Spanish. The selected dashboard language also controls the game-client language.
+
+Sensitive information such as browser profiles, session data, webhook URLs, logs, runtime reports, and local configuration remains stored locally and is excluded from Git.
+
 ## 📋 Requirements
 
 - Windows 10 or Windows 11

@@ -2,6 +2,26 @@
 
 All notable changes to Exadious Tanoth Companion are documented in this file.
 
+## [1.1.1] - 2026-07-16
+
+### Added
+
+- Added a persistent work report with status, start time, end time, duration, gold reward, and completion timestamp.
+- Added a midnight work scheduler that calculates the automatic start time from the configured duration so work finishes at 00:00.
+- Added a final availability check immediately before scheduled work begins.
+
+### Changed
+
+- Continued work reports across server restarts and reconstructed missing start times from the configured duration when required.
+- Displayed planned automatic work with a dedicated `Scheduled` status.
+- Completed dynamic accessibility translations for inventory slots and localized the latest-action text for sold inventory items.
+
+### Fixed
+
+- Prevented a resumed work report from replacing its original start time with the server restart time.
+- Prevented missing work duration values from being rendered as `0 h`.
+- Kept existing work sessions untouched when enabling the new midnight scheduling behavior.
+
 ## [1.1.0] - 2026-07-14
 
 ### Added

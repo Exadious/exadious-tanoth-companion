@@ -483,6 +483,7 @@ async function ensureBrowser() {
   });
   await context.exposeFunction('__tanothStatus', payload => update(payload));
   await context.exposeFunction('__tanothGetDailyStats', () => ({ ...state.dailyStats }));
+  await context.exposeFunction('__tanothGetReports', () => ({ ...state.reports }));
   const wirePage = currentPage => {
     currentPage.on('console', msg => {
       const message = msg.text();

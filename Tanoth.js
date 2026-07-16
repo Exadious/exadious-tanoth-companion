@@ -1719,6 +1719,39 @@ async function automaticDungeonLoop() {
 }
 
 let automaticWorkInProgress = false;
+let automaticWorkScheduleTimer = null;
+let automaticWorkScheduledStartAt = null;
+
+function scheduleAutomaticWorkForMidnight(hours) {
+    const now = new Date();
+    const endsAt = new Date(now);
+    endsAt.setHours(24, 0, 0, 0);
+    let startsAt = new Date(endsAt.getTime() - hours * 60 * 60 * 1000);
+    if (startsAt.getTime() <= now.getTime() + 1000) {
+        endsAt.setDate(endsAt.getDate() + 1);
+        startsAt = new Date(endsAt.getTime() - hours * 60 * 60 * 1000);
+    }
+    if (automaticWorkScheduledStartAt === startsAt.getTime() && automaticWorkScheduleTimer) return true;
+    if (automaticWorkScheduleTimer) clearTimeout(automaticWorkScheduleTimer);
+    automaticWorkScheduledStartAt = startsAt.getTime();
+    reportStatus({ reports: { work: {
+        hours,
+        startedAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        completedAt: null,
+        goldGained: null,
+        planned: true
+    } } });
+    console.log(`Automatic work scheduled for ${startsAt.toLocaleString()}; expected end at midnight.`);
+    automaticWorkScheduleTimer = setTimeout(async () => {
+        automaticWorkScheduleTimer = null;
+        automaticWorkScheduledStartAt = null;
+        if (window.__TANOTH_STOP__) return;
+        const started = await tryStartAutomaticWork({ scheduled: true });
+        if (!started) console.log('Scheduled automatic work was not started because another activity became available.');
+    }, Math.max(0, startsAt.getTime() - Date.now()));
+    return true;
+}
 
 async function hasAvailableDungeonFight() {
     if (!botConfig.enableDungeon || automaticDungeonInProgress) return automaticDungeonInProgress;
@@ -1750,7 +1783,7 @@ async function startWork(hours) {
     return parseXmlRpcValue(document.querySelector('methodResponse param > value')) || {};
 }
 
-async function tryStartAutomaticWork() {
+async function tryStartAutomaticWork({ scheduled = false } = {}) {
     if (!botConfig.enableWork || !botConfig.enablePvp || automaticWorkInProgress || automaticDungeonInProgress || window.__TANOTH_STOP__) return false;
     automaticWorkInProgress = true;
     try {
@@ -1763,6 +1796,7 @@ async function tryStartAutomaticWork() {
         if (await hasAvailableDungeonFight()) return false;
 
         const hours = Math.max(1, Math.min(8, Math.trunc(Number(botConfig.workHours) || 1)));
+        if (!scheduled) return scheduleAutomaticWorkForMidnight(hours);
         const resourcesBeforeWork = await getCurrentResources();
         await startWork(hours);
         const startedAt = new Date();
@@ -1770,9 +1804,12 @@ async function tryStartAutomaticWork() {
         reportStatus({
             statsEvent: { workSessions: 1, workHours: hours, successfulActions: 1, lastSuccessfulAction: 'Arbeit gestartet' },
             player: { currentTask: 'Arbeit', taskEndAt: endsAt.getTime() },
-            reports: { work: { hours, startedAt: startedAt.toISOString(), endsAt: endsAt.toISOString() } }
+            reports: { work: { hours, startedAt: startedAt.toISOString(), endsAt: endsAt.toISOString(), planned: false } }
         });
-        window.__TANOTH_PENDING_WORK__ = { endsAt: endsAt.getTime(), goldBefore: Number(resourcesBeforeWork.gold) };
+        window.__TANOTH_PENDING_WORK__ = {
+            endsAt: endsAt.getTime(), startedAt: startedAt.getTime(), hours,
+            goldBefore: Number(resourcesBeforeWork.gold)
+        };
         console.log(`Automatic work started for ${hours} hour(s); expected end ${endsAt.toLocaleTimeString()}.`);
         return true;
     } catch (error) {
@@ -1792,9 +1829,20 @@ async function refreshPlayerDataLoop() {
             const pendingWork = window.__TANOTH_PENDING_WORK__;
             if (pendingWork && Date.now() >= Number(pendingWork.endsAt)) {
                 const workGold = Number(currentResources.gold) - Number(pendingWork.goldBefore);
-                if (Number.isFinite(workGold) && workGold > 0) {
-                    reportStatus({ statsEvent: { workGold, lastSuccessfulAction: 'Arbeit abgeschlossen' } });
-                }
+                reportStatus({
+                    statsEvent: Number.isFinite(workGold) && workGold > 0
+                        ? { workGold, lastSuccessfulAction: 'Arbeit abgeschlossen' }
+                        : { lastSuccessfulAction: 'Arbeit abgeschlossen' },
+                    reports: { work: {
+                        hours: Number.isFinite(Number(pendingWork.hours)) ? Number(pendingWork.hours) : null,
+                        startedAt: Number.isFinite(Number(pendingWork.startedAt)) ? new Date(Number(pendingWork.startedAt)).toISOString() : null,
+                        detectedAt: pendingWork.detectedAt ? new Date(Number(pendingWork.detectedAt)).toISOString() : null,
+                        endsAt: new Date(Number(pendingWork.endsAt)).toISOString(),
+                        completedAt: new Date().toISOString(),
+                        goldGained: Number.isFinite(workGold) && workGold > 0 ? workGold : 0,
+                        resumed: Boolean(pendingWork.resumed)
+                    } }
+                });
                 window.__TANOTH_PENDING_WORK__ = null;
                 reportStatus({ player: { currentTask: 'Bereit', taskEndAt: null } });
             }
@@ -1829,6 +1877,29 @@ async function waitForExistingTaskOnStartup() {
         const remainingSeconds = Math.max(0, Number(task.timeTask));
         const endsAt = Date.now() + remainingSeconds * 1000;
         reportStatus({ player: { currentTask: displayType, taskEndAt: endsAt } });
+        if (displayType === 'Arbeit' && !window.__TANOTH_PENDING_WORK__) {
+            const detectedAt = Date.now();
+            const savedReports = typeof window.__tanothGetReports === 'function' ? await window.__tanothGetReports() : {};
+            const savedWork = savedReports?.work || {};
+            const savedEndAt = savedWork.endsAt ? new Date(savedWork.endsAt).getTime() : NaN;
+            const sameWork = Number.isFinite(savedEndAt) && Math.abs(savedEndAt - endsAt) < 120000;
+            const hours = sameWork && savedWork.hours != null && Number.isFinite(Number(savedWork.hours))
+                ? Number(savedWork.hours)
+                : Math.max(1, Math.min(8, Math.trunc(Number(botConfig.workHours) || 1)));
+            const startedAt = sameWork && savedWork.startedAt
+                ? new Date(savedWork.startedAt).getTime()
+                : endsAt - hours * 60 * 60 * 1000;
+            window.__TANOTH_PENDING_WORK__ = {
+                endsAt, startedAt, hours, detectedAt,
+                goldBefore: Number(currentResources.gold), resumed: true
+            };
+            reportStatus({ reports: { work: {
+                hours, startedAt: new Date(startedAt).toISOString(),
+                detectedAt: new Date(detectedAt).toISOString(),
+                endsAt: new Date(endsAt).toISOString(),
+                completedAt: null, goldGained: null, resumed: true
+            } } });
+        }
         console.log(`Existing ${displayType} detected. Waiting ${remainingSeconds} seconds until it is finished...`);
         await sleep(remainingSeconds + 2);
         if (window.__TANOTH_STOP__) return detectedTask;

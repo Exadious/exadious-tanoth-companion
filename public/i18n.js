@@ -49,6 +49,7 @@
     ["Erfolgreiche Aktionen","Successful actions","Actions réussies","Acciones correctas"],
     ["Festung","Fortress","Forteresse","Fortaleza"],
     ["Freier Platz","Empty slot","Emplacement libre","Espacio libre"],
+    ["Freier Inventarplatz","Empty inventory slot","Emplacement d’inventaire libre","Espacio de inventario libre"],
     ["GILDE","GUILD","GUILDE","GREMIO"],
     ["Gesamtwert","Total value","Valeur totale","Valor total"],
     ["Gespendete Blutsteine","Donated bloodstones","Pierres de sang données","Piedras de sangre donadas"],
@@ -70,6 +71,7 @@
     ["Goldreserve des Spielers","Player gold reserve","Réserve d’or du joueur","Reserva de oro del jugador"],
     ["Goldspenden","Gold donations","Dons d’or","Donaciones de oro"],
     ["Inventar verkaufen","Sell inventory","Vendre l’inventaire","Vender inventario"],
+    ["Inventargegenstand verkauft","Inventory item sold","Objet d’inventaire vendu","Objeto del inventario vendido"],
     ["Inventarbelegung","Inventory capacity","Occupation de l’inventaire","Ocupación del inventario"],
     ["Inventarwarnung ab %","Inventory warning at %","Alerte d’inventaire à %","Aviso de inventario al %"],
     ["Keine","None","Aucun","Ninguno"],
@@ -109,6 +111,12 @@
     ["Spieler-Ausrüstung","Player equipment","Équipement du joueur","Equipo del jugador"],
     ["Spieler-Prioritäten","Player priorities","Priorités du joueur","Prioridades del jugador"],
     ["Spielerausrüstung verbessert","Player equipment improved","Équipement du joueur amélioré","Equipo del jugador mejorado"],
+    ["Status","Status","Statut","Estado"],
+    ["Beginn","Start","Début","Inicio"],
+    ["Abgeschlossen","Completed","Terminé","Completado"],
+    ["Läuft","Running","En cours","En curso"],
+    ["Beendet","Finished","Terminé","Finalizado"],
+    ["Geplant","Scheduled","Planifié","Programado"],
     ["Stärke / Geschick","Strength / dexterity","Force / dextérité","Fuerza / destreza"],
     ["System","System","Système","Sistema"],
     ["Tageslimit für Ausbauten","Daily upgrade limit","Limite quotidienne des améliorations","Límite diario de mejoras"],
@@ -239,7 +247,7 @@
     for (const variant of occupiedVariants) {
       if (clean.endsWith(' ' + variant)) return clean.slice(0, -variant.length) + (dictionaries[current]?.[occupiedSource] || occupiedSource);
     }
-    const prefixes = ['Level ', 'Aktualisiert: ', 'Inventar ', 'Ende ', 'Rang ', 'Bonus ', 'Priorität ', 'Nächste Stufe: ', 'Dungeon-Gegner '];
+    const prefixes = ['Level ', 'Aktualisiert: ', 'Inventar ', 'Freier Inventarplatz ', 'Ende ', 'Rang ', 'Bonus ', 'Priorität ', 'Nächste Stufe: ', 'Dungeon-Gegner '];
     for (const prefix of prefixes) {
       const canonicalPrefix = canonicalFor(prefix.trim()) || prefix.trim();
       const variants = [prefix.trim(), ...Object.values(dictionaries).map(dict => dict[canonicalPrefix]).filter(Boolean)];

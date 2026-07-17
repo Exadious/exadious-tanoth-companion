@@ -8,6 +8,7 @@ const configPath = path.join(root, 'config.json');
 const playerCachePath = path.join(root, '.player-cache.json');
 const dailyStatsPath = path.join(root, '.daily-stats.json');
 const reportsPath = path.join(root, '.reports.json');
+const statsHistoryPath = path.join(root, '.stats-history.json');
 const localesPath = path.join(root, 'public', 'locales');
 if (!fs.existsSync(configPath)) fs.copyFileSync(path.join(root, 'config.example.json'), configPath);
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -19,7 +20,7 @@ const discordNotificationBooleanKeys = new Set([
   'botLifecycle', 'sessionWarnings', 'errors', 'adventures', 'pvp', 'dungeons', 'work',
   'levelUp', 'potionExpired', 'mountChanged', 'bloodstonesSpent', 'resourceWarnings',
   'inventoryWarnings', 'itemsSold', 'equipmentPlayer', 'equipmentCompanions',
-  'guildDonations', 'guildUpgrades', 'guildMembers', 'quietHoursEnabled'
+  'guildDonations', 'guildUpgrades', 'guildMembers', 'rareItems', 'quietHoursEnabled'
 ]);
 const defaultDiscordNotifications = {
   botLifecycle: false, sessionWarnings: false, errors: false,
@@ -27,7 +28,7 @@ const defaultDiscordNotifications = {
   levelUp: false, potionExpired: false, mountChanged: false, bloodstonesSpent: false,
   resourceWarnings: false, inventoryWarnings: false, itemsSold: false,
   equipmentPlayer: false, equipmentCompanions: false,
-  guildDonations: false, guildUpgrades: false, guildMembers: false,
+  guildDonations: false, guildUpgrades: false, guildMembers: false, rareItems: false,
   lowGoldThreshold: 0, lowBloodstonesThreshold: 0, inventoryWarningPercent: 90,
   quietHoursEnabled: false, quietHoursStart: 22, quietHoursEnd: 7
 };
@@ -43,6 +44,12 @@ function isDiscordNotifications(value) {
 }
 if (!supportedLocales.includes(config.uiLocale)) config.uiLocale = 'en-EN';
 config.bot.discordNotifications = { ...defaultDiscordNotifications, ...(config.bot.discordNotifications || {}) };
+config.bot.difficultyFallback ??= false;
+// Preserve the forced-fight behaviour for existing installations. New
+// installations receive the explicit, safer false value from config.example.
+config.bot.pvpForcedFightEnabled ??= true;
+config.bot.discordWeeklyStatsEnabled ??= false;
+delete config.bot.pvpMaxLevelDifference;
 let cachedPlayer = {};
 try { cachedPlayer = JSON.parse(fs.readFileSync(playerCachePath, 'utf8')); } catch {}
 const currentDayKey = () => {
@@ -69,11 +76,49 @@ try {
   const saved = JSON.parse(fs.readFileSync(dailyStatsPath, 'utf8'));
   if (saved.date === currentDayKey()) dailyStore = { ...dailyStore, ...saved, stats: { ...emptyDailyStats(), ...saved.stats }, samples: { ...dailyStore.samples, ...saved.samples } };
 } catch {}
+let statsHistory = { days: {} };
+try {
+  const saved = JSON.parse(fs.readFileSync(statsHistoryPath, 'utf8'));
+  if (saved && typeof saved.days === 'object') statsHistory = { days: saved.days };
+} catch {}
+const saveStatsHistory = () => {
+  statsHistory.days[dailyStore.date] = { ...emptyDailyStats(), ...dailyStore.stats };
+  fs.writeFileSync(statsHistoryPath, `${JSON.stringify(statsHistory, null, 2)}\n`, 'utf8');
+};
+const sumStats = entries => {
+  const total = emptyDailyStats();
+  for (const stats of entries) {
+    for (const key of Object.keys(total)) {
+      if (key === 'lastSuccessfulAction') continue;
+      total[key] += Number(stats?.[key]) || 0;
+    }
+    if (stats?.lastSuccessfulAction) total.lastSuccessfulAction = stats.lastSuccessfulAction;
+  }
+  return total;
+};
+const statisticsSnapshot = () => {
+  const today = new Date();
+  const weekStart = new Date(today);
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+  const monthPrefix = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-`;
+  const entries = Object.entries({ ...statsHistory.days, [dailyStore.date]: state.dailyStats });
+  const week = sumStats(entries.filter(([date]) => new Date(`${date}T00:00:00`) >= weekStart).map(([, stats]) => stats));
+  const month = sumStats(entries.filter(([date]) => date.startsWith(monthPrefix)).map(([, stats]) => stats));
+  const total = sumStats(entries.map(([, stats]) => stats));
+  const withRates = stats => ({
+    ...stats,
+    goldPerHour: stats.runtimeMs > 0 ? stats.goldCollected / (stats.runtimeMs / 3600000) : 0,
+    experiencePerHour: stats.runtimeMs > 0 ? stats.experienceGained / (stats.runtimeMs / 3600000) : 0
+  });
+  return { day: withRates(state.dailyStats), week: withRates(week), month: withRates(month), total: withRates(total) };
+};
 
 const allowedBotSettings = {
   server_speed: value => Number.isFinite(value) && value > 0 && value <= 100,
   priorityAdventure: value => ['experience', 'gold'].includes(value),
   difficulty: value => ['easy', 'medium', 'difficult', 'very_difficult'].includes(value),
+  difficultyFallback: value => typeof value === 'boolean',
   spendGoldOn: value => ['attributes', 'circle'].includes(value),
   priorityAttribute: value => ['MIX', 'STR', 'DEX', 'CON', 'INT'].includes(value),
   minGoldToSpend: value => Number.isInteger(value) && value >= 0,
@@ -89,8 +134,8 @@ const allowedBotSettings = {
   enablePvp: value => typeof value === 'boolean',
   pvpLimitType: value => ['rank', 'level', 'both'].includes(value),
   pvpMaxRankDifference: value => Number.isInteger(value) && value >= 0,
-  pvpMaxLevelDifference: value => Number.isInteger(value) && value >= 0,
   pvpOpponentLevelBelow: value => Number.isInteger(value) && value >= 1,
+  pvpForcedFightEnabled: value => typeof value === 'boolean',
   enableDungeon: value => typeof value === 'boolean',
   dungeonUseBloodstones: value => typeof value === 'boolean',
   dungeonMinBloodstones: value => Number.isInteger(value) && value >= 0,
@@ -101,6 +146,7 @@ const allowedBotSettings = {
   autoSellMinValue: value => Number.isInteger(value) && value >= 0,
   autoSellKeepAttributes: value => Array.isArray(value) && value.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute)),
   discordDailyStatsEnabled: value => typeof value === 'boolean',
+  discordWeeklyStatsEnabled: value => typeof value === 'boolean',
   discordWebhookUrl: value => typeof value === 'string' && (value === '' || isDiscordWebhookUrl(value)),
   discordNotifications: isDiscordNotifications,
   guildAutoDonateGold: value => typeof value === 'boolean',
@@ -156,6 +202,7 @@ function update(patch) {
   };
   const statsEvent = patch.statsEvent ? { ...patch.statsEvent } : null;
   if (dailyStore.date !== currentDayKey()) {
+    saveStatsHistory();
     dailyStore = { date: currentDayKey(), stats: emptyDailyStats(), samples: { gold: null, bloodstones: null, experience: null, adventures: null } };
     state.dailyStats = dailyStore.stats;
     Object.assign(statBaseline, dailyStore.samples);
@@ -207,6 +254,7 @@ function update(patch) {
   dailyStore.stats = state.dailyStats;
   dailyStore.samples = statBaseline;
   fs.writeFileSync(dailyStatsPath, `${JSON.stringify(dailyStore, null, 2)}\n`, 'utf8');
+  saveStatsHistory();
   detectDiscordNotifications(previous, state, { ...patch, statsEvent });
 }
 
@@ -230,6 +278,7 @@ setInterval(() => {
   dailyStore.stats = state.dailyStats;
   dailyStore.samples = statBaseline;
   fs.writeFileSync(dailyStatsPath, `${JSON.stringify(dailyStore, null, 2)}\n`, 'utf8');
+  saveStatsHistory();
 }, 5000);
 
 function isDiscordWebhookUrl(value) {
@@ -316,6 +365,24 @@ function detectDiscordNotifications(previous, current, patch) {
   if (inventoryPercent >= warningPercent && oldInventoryPercent < warningPercent) {
     queueDiscordNotification({ key: 'inventoryWarnings', category: 'Ausrüstung & Inventar', title: inventoryPercent >= 100 ? 'Inventar vollständig belegt' : 'Inventar wird knapp', description: `${player.inventoryOccupied} / ${player.inventorySlots} Plätze belegt (${Math.round(inventoryPercent)} %).`, color: inventoryPercent >= 100 ? 0xed4245 : 0xe6a23c });
   }
+  const oldInventoryIds = new Set((Array.isArray(previousPlayer.inventoryItems) ? previousPlayer.inventoryItems : [])
+    .map(item => item?.instanceId).filter(id => id !== null && id !== undefined));
+  if (oldInventoryIds.size > 0) {
+    for (const item of Array.isArray(player.inventoryItems) ? player.inventoryItems : []) {
+      if (oldInventoryIds.has(item?.instanceId) || (!item?.unique && !item?.suffixId)) continue;
+      const attributes = (item.attributes || []).map(attribute => `${attribute.name} ${Number(attribute.value) >= 0 ? '+' : ''}${attribute.value}`).join('\n') || 'Keine Attribute';
+      queueDiscordNotification({
+        key: 'rareItems', category: 'Ausrüstung & Inventar', title: 'Seltener Gegenstand gefunden',
+        description: `**${item.name || item.slot || 'Unbekannter Gegenstand'}**`,
+        fields: [
+          discordField('Attribute', attributes, false),
+          discordField('Beschreibung', item.description || 'Keine Beschreibung vorhanden', false),
+          discordField('Wert', `${formatInteger(item.sellValue)} Gold`, true)
+        ],
+        signature: `rare:${item.instanceId || item.name}`, color: 0x9b59b6
+      });
+    }
+  }
   const goldThreshold = Number(config.bot.discordNotifications?.lowGoldThreshold || 0);
   const bloodstoneThreshold = Number(config.bot.discordNotifications?.lowBloodstonesThreshold || 0);
   if (goldThreshold > 0 && Number.isFinite(previous.gold) && previous.gold >= goldThreshold && current.gold < goldThreshold) queueDiscordNotification({ key: 'resourceWarnings', category: 'Ressourcen', title: 'Goldreserve unterschritten', description: `${formatInteger(current.gold)} Gold verbleiben.`, color: 0xe6a23c });
@@ -359,8 +426,8 @@ const formatDuration = milliseconds => {
   return `${hours} Std. ${minutes} Min.`;
 };
 
-function buildDiscordDailyStatsPayload(test = false) {
-  const stats = state.dailyStats || emptyDailyStats();
+function buildDiscordDailyStatsPayload(test = false, suppliedStats = null) {
+  const stats = suppliedStats || state.dailyStats || emptyDailyStats();
   const pvpTotal = Number(stats.pvpWins || 0) + Number(stats.pvpLosses || 0);
   const netGold = Number(stats.goldCollected || 0) - Number(stats.goldSpent || 0);
   const pvpRate = pvpTotal ? Math.round(Number(stats.pvpWins || 0) / pvpTotal * 100) : 0;
@@ -423,7 +490,25 @@ async function sendDiscordDailyStats({ test = false } = {}) {
   log(test ? 'Discord-Teststatistik wurde gesendet' : 'Discord-Tagesstatistik wurde gesendet');
 }
 
+async function sendDiscordWeeklyStats() {
+  const webhookUrl = String(config.bot.discordWebhookUrl || '').trim();
+  if (!isDiscordWebhookUrl(webhookUrl)) throw new Error('Keine gültige Discord-Webhook-URL konfiguriert');
+  const week = statisticsSnapshot().week;
+  const payload = buildDiscordDailyStatsPayload(false, week);
+  payload.embeds[0].title = '📅 Wöchentliche Zusammenfassung';
+  payload.embeds[0].footer = { text: `Kalenderwoche bis ${currentDayKey()} · Versand montags um 12:05 Uhr` };
+  payload.embeds[0].fields.splice(1, 0, {
+    name: '⏱️ Durchschnitt pro Stunde',
+    value: `\`\`\`\nGold        ${formatInteger(week.goldPerHour)} / Std.\nErfahrung   ${formatInteger(week.experiencePerHour)} / Std.\n\`\`\``,
+    inline: false
+  });
+  const response = await fetch(webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!response.ok) throw new Error(`Discord antwortete mit HTTP ${response.status}`);
+  log('Discord-Wochenstatistik wurde gesendet');
+}
+
 let discordDailyStatsTimer;
+let discordWeeklyStatsTimer;
 function scheduleDiscordDailyStats() {
   clearTimeout(discordDailyStatsTimer);
   const now = new Date();
@@ -437,6 +522,25 @@ function scheduleDiscordDailyStats() {
       log(`Discord-Tagesstatistik fehlgeschlagen: ${error.message}`);
     } finally {
       scheduleDiscordDailyStats();
+    }
+  }, Math.max(1000, next.getTime() - now.getTime()));
+}
+
+function scheduleDiscordWeeklyStats() {
+  clearTimeout(discordWeeklyStatsTimer);
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(12, 5, 0, 0);
+  const daysUntilMonday = (8 - next.getDay()) % 7;
+  next.setDate(next.getDate() + daysUntilMonday);
+  if (next <= now) next.setDate(next.getDate() + 7);
+  discordWeeklyStatsTimer = setTimeout(async () => {
+    try {
+      if (config.bot.discordWeeklyStatsEnabled) await sendDiscordWeeklyStats();
+    } catch (error) {
+      log(`Discord-Wochenstatistik fehlgeschlagen: ${error.message}`);
+    } finally {
+      scheduleDiscordWeeklyStats();
     }
   }, Math.max(1000, next.getTime() - now.getTime()));
 }
@@ -675,7 +779,7 @@ async function saveBotSettings(input) {
     if (!allowedBotSettings[key](value)) throw new Error(`Ungültiger Wert für ${key}`);
   }
   const nextBotConfig = { ...config.bot, ...input };
-  if (nextBotConfig.discordDailyStatsEnabled && !isDiscordWebhookUrl(nextBotConfig.discordWebhookUrl)) {
+  if ((nextBotConfig.discordDailyStatsEnabled || nextBotConfig.discordWeeklyStatsEnabled) && !isDiscordWebhookUrl(nextBotConfig.discordWebhookUrl)) {
     throw new Error('Für den Discord-Versand wird eine gültige Webhook-URL benötigt');
   }
   config.bot = nextBotConfig;
@@ -692,7 +796,7 @@ async function saveBotSettings(input) {
 const server = http.createServer(async (req, res) => {
   if (req.url === '/api/status') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(JSON.stringify({ ...state, logs: visibleLogs() }));
+    return res.end(JSON.stringify({ ...state, statistics: statisticsSnapshot(), logs: visibleLogs() }));
   }
   if (req.method === 'GET' && req.url === '/api/locale') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -781,11 +885,13 @@ const server = http.createServer(async (req, res) => {
 server.listen(config.dashboardPort, config.dashboardHost, () => {
   log(`Dashboard: http://${config.dashboardHost}:${config.dashboardPort}`);
   scheduleDiscordDailyStats();
+  scheduleDiscordWeeklyStats();
   if (config.autoStart) startBot();
 });
 
 async function shutdown() {
   clearTimeout(discordDailyStatsTimer);
+  clearTimeout(discordWeeklyStatsTimer);
   await stopBot();
   if (context) await context.close();
   server.close(() => process.exit(0));

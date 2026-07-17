@@ -5,8 +5,9 @@ let botConfig = {
     // Priority on adventures: 'experience' or 'gold'
     priorityAdventure: 'gold',
 
-    // Max difficulty of adventures: 'easy', 'medium', 'difficult', 'very_difficult'
+    // Exact adventure difficulty: 'easy', 'medium', 'difficult', 'very_difficult'
     difficulty: 'medium',
+    difficultyFallback: false,
 
     // After each adventure, spend gold on: 'attributes' or 'circle'
     // If circle it's completed, it will be changed to attributes.
@@ -52,8 +53,8 @@ let botConfig = {
     enablePvp: false,
     pvpLimitType: 'both',
     pvpMaxRankDifference: 5,
-    pvpMaxLevelDifference: 3,
     pvpOpponentLevelBelow: 57,
+    pvpForcedFightEnabled: false,
 
     // Dungeon / map battles. Bloodstone attempts require explicit opt-in.
     enableDungeon: false,
@@ -103,6 +104,21 @@ let currentResources = {
     gold: 0,
     bloodstones: 0
 };
+
+const pendingAdventureStorageKey = '__tanothPendingAdventure';
+function savePendingAdventure(adventure) {
+    try { localStorage.setItem(pendingAdventureStorageKey, JSON.stringify(adventure)); } catch {}
+}
+function readPendingAdventure() {
+    try {
+        const value = JSON.parse(localStorage.getItem(pendingAdventureStorageKey) || 'null');
+        if (!value || !Number.isFinite(Number(value.endsAt)) || Date.now() - Number(value.endsAt) > 24 * 60 * 60 * 1000) return null;
+        return value;
+    } catch { return null; }
+}
+function clearPendingAdventure() {
+    try { localStorage.removeItem(pendingAdventureStorageKey); } catch {}
+}
 
 
 
@@ -231,6 +247,11 @@ async function getCurrentResources(){
     
     const xmlResourcesData = await fetchXmlData(botConfig.url, xmlGetResources);
     const resources = parseResourcesXMLResponse(xmlResourcesData);
+    // Keep the shared snapshot in sync. Several background routines (including
+    // the work report) read this value after awaiting getCurrentResources().
+    // Previously only the return value was current, so completed work could be
+    // compared against a stale gold balance and incorrectly report +0 gold.
+    currentResources = resources;
     const statusUpdate = { player: resources.player };
     if (Number.isFinite(resources.gold)) statusUpdate.gold = resources.gold;
     if (Number.isFinite(resources.bloodstones)) statusUpdate.bloodstones = resources.bloodstones;
@@ -509,8 +530,17 @@ async function processCircle() {
 }
 
 const filterAdventuresByDifficulty = (adventures, difficulty) => {
-    const maxDifficulty = difficultyMap[difficulty];
-    return adventures.filter(adventure => adventure.difficulty <= maxDifficulty);
+    const selectedDifficulty = difficultyMap[difficulty];
+    const exact = adventures.filter(adventure => adventure.difficulty === selectedDifficulty);
+    if (exact.length || !botConfig.difficultyFallback) return exact;
+    for (let fallback = selectedDifficulty - 1; fallback >= -1; fallback -= 1) {
+        const reduced = adventures.filter(adventure => adventure.difficulty === fallback);
+        if (reduced.length) {
+            console.log(`No adventure with difficulty ${selectedDifficulty} available; falling back to ${fallback}.`);
+            return reduced;
+        }
+    }
+    return [];
 };
 
 const findBestAdventure = (adventures, priority) => {
@@ -528,7 +558,7 @@ const findBestAdventure = (adventures, priority) => {
 function getBestAdventure(data) {
     const { difficulty, priorityAdventure } = botConfig;
 
-    // Filter adventures based on difficulty
+    // Only consider adventures with the exactly selected difficulty.
     const filteredAdventures = filterAdventuresByDifficulty(data.adventures, difficulty);
 
     // Check if any adventures match the difficulty filter
@@ -636,6 +666,9 @@ async function processAdventure() {
 
         const startAdventure = await fetchXmlData(botConfig.url, xmlStartAdventure);
         const duration = (bestAdventure.duration / botConfig.server_speed) + 5;
+        savePendingAdventure({ adventureId: bestAdventure.id, difficulty: bestAdventure.difficulty,
+            gold: Math.max(0, Number(bestAdventure.gold) || 0), experience: Math.max(0, Number(bestAdventure.experience) || 0),
+            usedBloodstone, endsAt: Date.now() + duration * 1000 });
         reportStatus({ player: { currentTask: 'Abenteuer', taskEndAt: Date.now() + duration * 1000 } });
         console.log(new Date().toLocaleTimeString());
         console.log(`Waiting for ${duration} seconds before next adventure...`);
@@ -644,6 +677,7 @@ async function processAdventure() {
         if (window.__TANOTH_STOP__) return data;
         console.log("Getting the result of the adventure...");
         const result = await fetchXmlData(botConfig.url, xmlGetAdventures);
+        await sleep(1);
 
         const afterAdventure = await Promise.all([
             window.fetchTanothPlayerData().catch(() => null),
@@ -664,12 +698,13 @@ async function processAdventure() {
             adventureId: bestAdventure.id,
             difficulty: difficultyNames[String(bestAdventure.difficulty)] || String(bestAdventure.difficulty),
             durationSeconds: Math.max(0, Math.round(bestAdventure.duration / botConfig.server_speed)),
-            goldGained: Number.isFinite(actualGold) && actualGold >= 0 ? actualGold : bestAdventure.gold,
-            experienceGained: Number.isFinite(actualExperience) && actualExperience >= 0 ? actualExperience : bestAdventure.experience,
+            goldGained: Number.isFinite(actualGold) && actualGold > 0 ? actualGold : Math.max(0, Number(bestAdventure.gold) || 0),
+            experienceGained: Number.isFinite(actualExperience) && actualExperience > 0 ? actualExperience : Math.max(0, Number(bestAdventure.experience) || 0),
             bloodstonesSpent: usedBloodstone ? Math.max(1, Number(beforeResources.bloodstones) - Number(afterResources.bloodstones) || 1) : 0,
             timestamp: new Date().toISOString()
             } }
         });
+        clearPendingAdventure();
 
         await sleep(2);
         reportStatus({ player: { currentTask: 'Bereit', taskEndAt: null } });
@@ -962,6 +997,7 @@ window.fetchTanothPlayerData = async () => {
             unique: isUnique,
             suffixId,
             sellValue: Number(findValueByName(item, 'sellvalue')) || 0,
+            description: findValueByName(item, 'description') || findValueByName(item, 'item_description') || findValueByName(item, 'desc') || null,
             attributes
         };
     };
@@ -1440,6 +1476,7 @@ async function processAutomaticGuildActions() {
 
 let automaticPvpInProgress = false;
 let lastPvpNoMatchLogAt = 0;
+let lastPvpCandidateLogAt = 0;
 
 function parseDirectStruct(struct) {
     const result = {};
@@ -1488,7 +1525,7 @@ function finiteNumberFrom(object, aliases) {
     return null;
 }
 
-async function getRandomPvpOpponent() {
+async function getPvpOpponents() {
     const request = `<methodCall><methodName>GetPvpData</methodName><params>` +
         `<param><value><string>${flashvars.sessionID}</string></value></param>` +
         `</params></methodCall>`;
@@ -1497,16 +1534,28 @@ async function getRandomPvpOpponent() {
     if (document.querySelector('fault')) {
         throw new Error(document.querySelector('fault string')?.textContent?.trim() || 'GetPvpData wurde abgelehnt');
     }
-    const data = parseDirectStruct(document.querySelector('methodResponse struct'));
-    return {
+    const structs = Array.from(document.querySelectorAll('methodResponse struct'));
+    const rootData = parseDirectStruct(structs[0]);
+    const cooldown = finiteNumberFrom(rootData, ['reattack_countdown', 'fight_countdown', 'countdown']) || 0;
+    const freeReattacks = finiteNumberFrom(rootData, ['free_reattacks', 'free_fights']) || 0;
+    const opponents = structs.map(parseDirectStruct).map(data => ({
         id: finiteNumberFrom(data, ['id', 'user_id', 'player_id']),
         name: data.name || data.username || data.player_name || '',
         level: finiteNumberFrom(data, ['level', 'player_level']),
         rank: finiteNumberFrom(data, ['pvp_rank', 'rank', 'position', 'place']),
-        cooldown: finiteNumberFrom(data, ['reattack_countdown', 'fight_countdown', 'countdown']) || 0,
-        freeReattacks: finiteNumberFrom(data, ['free_reattacks', 'free_fights']) || 0,
+        cooldown: finiteNumberFrom(data, ['reattack_countdown', 'fight_countdown', 'countdown']) ?? cooldown,
+        freeReattacks: finiteNumberFrom(data, ['free_reattacks', 'free_fights']) ?? freeReattacks,
         fields: Object.keys(data)
-    };
+    })).filter(opponent => opponent.name && Number.isFinite(opponent.level));
+    const unique = [];
+    const seen = new Set();
+    for (const opponent of opponents) {
+        const identity = opponent.id ?? `${opponent.name}:${opponent.level}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        unique.push(opponent);
+    }
+    return unique;
 }
 
 async function resolvePvpRank(opponent) {
@@ -1525,6 +1574,37 @@ async function resolvePvpRank(opponent) {
         String(entry.name || '').toLocaleLowerCase() === String(opponent.name).toLocaleLowerCase()
     );
     return match ? finiteNumberFrom(match, ['rank', 'pvp_rank', 'position', 'place']) : null;
+}
+
+async function getPvpHighscoreOpponents() {
+    const request = `<methodCall><methodName>GetHighscore</methodName><params>` +
+        `<param><value><string>${flashvars.sessionID}</string></value></param>` +
+        `<param><value><string>USER_PVP</string></value></param>` +
+        `<param><value><string>SORT_USER_FAME</string></value></param>` +
+        `<param><value><string></string></value></param>` +
+        `</params></methodCall>`;
+    const response = await fetchXmlData(botConfig.url, request);
+    const document = new DOMParser().parseFromString(response || '', 'text/xml');
+    if (document.querySelector('fault')) return [];
+    const unique = [];
+    const seen = new Set();
+    for (const data of Array.from(document.querySelectorAll('array > data > value > struct')).map(parseDirectStruct)) {
+        const opponent = {
+            id: finiteNumberFrom(data, ['id', 'user_id', 'player_id']),
+            name: data.name || data.username || data.player_name || '',
+            level: finiteNumberFrom(data, ['level', 'player_level']),
+            rank: finiteNumberFrom(data, ['rank', 'pvp_rank', 'position', 'place']),
+            cooldown: 0,
+            freeReattacks: 0,
+            fields: Object.keys(data)
+        };
+        if (!opponent.name || !Number.isFinite(opponent.level)) continue;
+        const identity = opponent.id ?? `${opponent.name}:${opponent.level}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        unique.push(opponent);
+    }
+    return unique;
 }
 
 function pvpOpponentMatches(opponent, player) {
@@ -1579,30 +1659,44 @@ function createCombatReport(opponent, fightResponse) {
     };
 }
 
-async function processAutomaticPvp() {
+async function processAutomaticPvp({ ignoreLimits = false } = {}) {
     if (!botConfig.enablePvp || automaticPvpInProgress || window.__TANOTH_STOP__) return null;
     automaticPvpInProgress = true;
     try {
         const snapshot = await window.fetchTanothPlayerData();
         const player = snapshot?.player || {};
-        const seen = new Set();
-        for (let attempt = 0; attempt < 8 && botConfig.enablePvp && !window.__TANOTH_STOP__; attempt++) {
-            const opponent = await getRandomPvpOpponent();
+        let opponents = await getPvpOpponents();
+        if (!ignoreLimits && !opponents.some(opponent => pvpOpponentMatches(opponent, player))) {
+            const highscoreOpponents = await getPvpHighscoreOpponents();
+            const identities = new Set(opponents.map(opponent => opponent.id ?? `${opponent.name}:${opponent.level}`));
+            opponents = opponents.concat(highscoreOpponents.filter(opponent => {
+                const identity = opponent.id ?? `${opponent.name}:${opponent.level}`;
+                if (identities.has(identity)) return false;
+                identities.add(identity);
+                return true;
+            }));
+        }
+        if (Date.now() - lastPvpCandidateLogAt >= 10 * 60 * 1000) {
+            lastPvpCandidateLogAt = Date.now();
+            const levels = opponents.map(opponent => opponent.level).filter(Number.isFinite);
+            console.log(`Automatic PvP: received ${opponents.length} candidate(s)` +
+                (levels.length ? `; levels ${Math.min(...levels)}-${Math.max(...levels)}.` : '.'));
+        }
+        for (const opponent of opponents.slice(0, 8)) {
+            if (!botConfig.enablePvp || window.__TANOTH_STOP__) break;
+            if (!opponent.name || opponent.name === player.name) continue;
             if (opponent.cooldown > 0 && opponent.freeReattacks <= 1) {
                 console.log(`Automatic PvP: fight cooldown ${opponent.cooldown} seconds; no bloodstones will be used.`);
                 return false;
             }
-            const identity = opponent.id ?? opponent.name;
-            if (seen.has(identity)) break;
-            seen.add(identity);
-            if ((botConfig.pvpLimitType === 'rank' || botConfig.pvpLimitType === 'both') && !Number.isFinite(opponent.rank)) {
+            if (!ignoreLimits && (botConfig.pvpLimitType === 'rank' || botConfig.pvpLimitType === 'both') && !Number.isFinite(opponent.rank)) {
                 opponent.rank = await resolvePvpRank(opponent);
             }
-            if (!pvpOpponentMatches(opponent, player)) {
+            if (!ignoreLimits && !pvpOpponentMatches(opponent, player)) {
                 continue;
             }
             if (!Number.isFinite(opponent.rank)) opponent.rank = await resolvePvpRank(opponent);
-            console.log(`Automatic PvP: fighting ${opponent.name} (level ${opponent.level}, rank ${opponent.rank}).`);
+            console.log(`Automatic PvP: fighting ${opponent.name} (level ${opponent.level}, rank ${opponent.rank})${ignoreLimits ? ' after 12 unsuccessful checks; configured limits are ignored.' : '.'}`);
             const fightResponse = await fightPvpOpponent(opponent);
             const combatReport = createCombatReport(opponent, fightResponse);
             reportStatus({
@@ -1633,18 +1727,42 @@ async function processAutomaticPvp() {
 }
 
 async function automaticPvpLoop() {
-    let checksWithoutFight = 0;
+    let checksInGroup = 0;
+    let completedSearchGroups = 0;
     while (!window.__TANOTH_STOP__) {
         const fightStarted = await processAutomaticPvp();
-        if (fightStarted === true) checksWithoutFight = 0;
+        if (fightStarted === true) {
+            checksInGroup = 0;
+            completedSearchGroups = 0;
+        }
         else if (fightStarted === false) {
-            checksWithoutFight += 1;
-            console.log(`Automatic PvP: ${checksWithoutFight}/3 checks without a fight.`);
-            if (checksWithoutFight >= 3) {
+            checksInGroup += 1;
+            console.log(`Automatic PvP: group ${completedSearchGroups + 1}/4, check ${checksInGroup}/3 without a fight.`);
+            if (checksInGroup >= 3) {
+                completedSearchGroups += 1;
+                checksInGroup = 0;
                 await tryStartAutomaticWork();
-                checksWithoutFight = 0;
+            }
+            if (completedSearchGroups >= 4) {
+                if (!botConfig.pvpForcedFightEnabled) {
+                    completedSearchGroups = 0;
+                    reportStatus({ statsEvent: { pauses: 1, pauseDurationMs: 5 * 60 * 60 * 1000 } });
+                    console.log('Automatic PvP: forced fights are disabled; starting a new search cycle after a 5 hour pause.');
+                    await sleep(5 * 60 * 60);
+                    continue;
+                }
+                console.log('Automatic PvP: four groups of three checks found no suitable opponent; accepting the current opponent without level or rank limits.');
+                const forcedFightStarted = await processAutomaticPvp({ ignoreLimits: true });
+                completedSearchGroups = 0;
+                if (forcedFightStarted !== true) {
+                    reportStatus({ statsEvent: { pauses: 1, pauseDurationMs: 5 * 60 * 60 * 1000 } });
+                    console.log('Automatic PvP: the forced fight could not start; pausing fight checks for 5 hours.');
+                    await sleep(5 * 60 * 60);
+                    continue;
+                }
+            } else if (checksInGroup === 0 && completedSearchGroups > 0) {
                 reportStatus({ statsEvent: { pauses: 1, pauseDurationMs: 5 * 60 * 60 * 1000 } });
-                console.log('Automatic PvP: pausing fight checks for 5 hours.');
+                console.log(`Automatic PvP: search group ${completedSearchGroups}/4 completed; pausing fight checks for 5 hours.`);
                 await sleep(5 * 60 * 60);
                 continue;
             }
@@ -2076,6 +2194,7 @@ async function runBot() {
                     /* Getting the possible result of the currently running task */
                     const result = await fetchXmlData(botConfig.url, xmlGetAdventures);
                     if (isRunningAdventure && !window.__TANOTH_STOP__) {
+                        await sleep(1);
                         const runningAdventureAfter = await Promise.all([
                             window.fetchTanothPlayerData().catch(() => null),
                             getCurrentResources().catch(() => ({ ...currentResources }))
@@ -2087,21 +2206,25 @@ async function runBot() {
                         const goldGained = Number(afterResources.gold) - Number(beforeResources.gold);
                         const experienceGained = Number(afterPlayer.experience) - Number(beforePlayer.experience);
                         const bloodstonesSpent = Number(beforeResources.bloodstones) - Number(afterResources.bloodstones);
-                        const recoveredAdventureUsedBloodstone = Number.isFinite(bloodstonesSpent) && bloodstonesSpent > 0;
+                        const pendingAdventure = readPendingAdventure();
+                        const recoveredAdventureUsedBloodstone = (Number.isFinite(bloodstonesSpent) && bloodstonesSpent > 0) || Boolean(pendingAdventure?.usedBloodstone);
                         reportStatus({
                             statsEvent: recoveredAdventureUsedBloodstone
                                 ? { bloodstoneAdventures: 1, successfulActions: 1, lastSuccessfulAction: 'Abenteuer mit Blutstein abgeschlossen' }
                                 : { freeAdventures: 1, successfulActions: 1, lastSuccessfulAction: 'Kostenloses Abenteuer abgeschlossen' },
                             reports: { adventure: {
-                            adventureId: null,
-                            difficulty: '–',
+                            adventureId: pendingAdventure?.adventureId ?? null,
+                            difficulty: pendingAdventure && Number.isFinite(Number(pendingAdventure.difficulty))
+                                ? ({ '-1': 'Leicht', 0: 'Mittel', 1: 'Schwierig', 2: 'Sehr schwierig' }[String(pendingAdventure.difficulty)] || String(pendingAdventure.difficulty))
+                                : '–',
                             durationSeconds: Math.max(0, Math.round(adventureData.taskRunning.timeTask)),
-                            goldGained: Number.isFinite(goldGained) && goldGained >= 0 ? goldGained : 0,
-                            experienceGained: Number.isFinite(experienceGained) && experienceGained >= 0 ? experienceGained : 0,
-                            bloodstonesSpent: Number.isFinite(bloodstonesSpent) && bloodstonesSpent > 0 ? bloodstonesSpent : 0,
+                            goldGained: Number.isFinite(goldGained) && goldGained > 0 ? goldGained : Math.max(0, Number(pendingAdventure?.gold) || 0),
+                            experienceGained: Number.isFinite(experienceGained) && experienceGained > 0 ? experienceGained : Math.max(0, Number(pendingAdventure?.experience) || 0),
+                            bloodstonesSpent: Number.isFinite(bloodstonesSpent) && bloodstonesSpent > 0 ? bloodstonesSpent : (pendingAdventure?.usedBloodstone ? 1 : 0),
                             timestamp: new Date().toISOString()
                             } }
                         });
+                        clearPendingAdventure();
                     }
                 }
 

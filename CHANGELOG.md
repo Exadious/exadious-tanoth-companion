@@ -2,6 +2,32 @@
 
 All notable changes to Exadious Tanoth Companion are documented in this file.
 
+## [1.2.0] - 2026-07-17
+
+### Added
+
+- Added persistent weekly, monthly, and lifetime statistics with gold and experience rates per hour.
+- Added a configurable weekly Discord summary and rare-item notifications containing item details and value.
+- Added an optional adventure difficulty fallback and a separately configurable forced PvP fight.
+
+### Changed
+
+- Made adventure difficulty selection exact unless the new fallback option is enabled.
+- Reworked automatic PvP into four groups of three checks, with a five-hour pause between groups and an optional forced fight after the twelfth unsuccessful check.
+- Completed and aligned all German, English, French, and Spanish language packs.
+
+### Fixed
+
+- Fixed work reports showing `+0` gold when the shared resource snapshot had not been updated.
+- Fixed adventure reports and Discord notifications showing zero rewards despite a completed adventure.
+- Improved PvP opponent discovery for nested opponent lists and added a high-score fallback.
+- Preserved pending adventure data across restarts so the completed adventure can still be reported correctly.
+
+### Security and privacy
+
+- Excluded the local long-term statistics file from Git.
+- Kept runtime profiles, local configuration, reports, logs, and Discord credentials outside the repository.
+
 ## [1.1.1] - 2026-07-16
 
 ### Added

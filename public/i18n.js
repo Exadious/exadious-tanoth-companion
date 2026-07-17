@@ -152,6 +152,17 @@
     ["Der Versand erfolgt nach deutscher Systemzeit. Die Webhook-URL wird nur lokal in config.json gespeichert und nicht in das Git-Repository aufgenommen.","Messages use German system time. The webhook URL is stored only in the local config.json and is not committed to Git.","Les envois utilisent l’heure système allemande. L’URL du webhook est enregistrée uniquement dans le fichier config.json local et n’est pas ajoutée à Git.","Los envíos usan la hora del sistema alemán. La URL del webhook se guarda solo en el archivo config.json local y no se añade a Git."],
     ["Es werden ausschließlich Ausbauten mit 0 Blutsteinkosten gekauft. Spielerreserve und Tageslimits werden vor jeder Aktion geprüft. Ein Tageslimit von 0 verhindert die jeweilige Aktion.","Only upgrades costing 0 bloodstones are purchased. Player reserve and daily limits are checked before every action. A daily limit of 0 prevents that action.","Seules les améliorations coûtant 0 pierre de sang sont achetées. La réserve du joueur et les limites quotidiennes sont vérifiées avant chaque action. Une limite de 0 empêche l’action.","Solo se compran mejoras que cuestan 0 piedras de sangre. La reserva del jugador y los límites diarios se comprueban antes de cada acción. Un límite de 0 impide la acción."],
     ["Werte von 0 deaktivieren die jeweilige Ressourcenwarnung. Sitzungs- und kritische Fehlerwarnungen werden auch während der Ruhezeit gesendet. Identische Meldungen werden für 30 Sekunden zusammengefasst.","A value of 0 disables the corresponding resource warning. Session and critical error warnings are sent during quiet hours. Identical messages are grouped for 30 seconds.","Une valeur de 0 désactive l’alerte de ressource correspondante. Les alertes de session et d’erreur critique sont envoyées pendant les heures silencieuses. Les messages identiques sont regroupés pendant 30 secondes.","Un valor de 0 desactiva el aviso de recursos correspondiente. Los avisos de sesión y errores críticos se envían durante el horario silencioso. Los mensajes idénticos se agrupan durante 30 segundos."]
+    ,
+    ["Schwierigkeit automatisch reduzieren, wenn nicht verfügbar","Automatically reduce difficulty when unavailable","Réduire automatiquement la difficulté si elle n’est pas disponible","Reducir automáticamente la dificultad si no está disponible"],
+    ["Erzwungenen Kampf nach vier erfolglosen Suchgruppen aktivieren","Enable forced battle after four unsuccessful search groups","Activer le combat forcé après quatre groupes de recherche infructueux","Activar combate forzado tras cuatro grupos de búsqueda fallidos"],
+    ["Wöchentliche Zusammenfassung montags um 12:05 Uhr senden","Send weekly summary on Mondays at 12:05","Envoyer le résumé hebdomadaire le lundi à 12 h 05","Enviar el resumen semanal los lunes a las 12:05"],
+    ["Seltener Gegenstand gefunden","Rare item found","Objet rare trouvé","Objeto raro encontrado"],
+    ["Tages- und Langzeitstatistiken","Daily and long-term statistics","Statistiques quotidiennes et à long terme","Estadísticas diarias y a largo plazo"],
+    ["Woche","Week","Semaine","Semana"],
+    ["Monat","Month","Mois","Mes"],
+    ["Gesamte Laufzeit","All time","Toute la période","Todo el tiempo"],
+    ["Bei einem Grenzwert von 57 werden alle Gegner bis einschließlich Level 56 berücksichtigt. Der optionale erzwungene Kampf ignoriert Level und Rang.","With a limit of 57, opponents up to level 56 are considered. The optional forced battle ignores level and rank.","Avec une limite de 57, les adversaires jusqu’au niveau 56 sont pris en compte. Le combat forcé facultatif ignore le niveau et le rang.","Con un límite de 57, se consideran oponentes hasta el nivel 56. El combate forzado opcional ignora el nivel y el rango."],
+    ["Priorität der Gildenausbauten","Guild upgrade priority","Priorité des améliorations de guilde","Prioridad de mejoras del gremio"]
   ];
   let current = 'en-EN';
   let translating = false;
@@ -311,6 +322,10 @@
       option.setAttribute('aria-selected', String(active));
     });
     translateTree();
+    for (const [id, source] of [['startButton', 'Starten'], ['stopButton', 'Stoppen']]) {
+      const button = document.getElementById(id);
+      if (button) button.textContent = dictionaries[current]?.[source] || source;
+    }
     if (persist) {
       const response = await fetch('/api/locale', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ locale }) });
       if (!response.ok) throw new Error(`Language HTTP ${response.status}`);

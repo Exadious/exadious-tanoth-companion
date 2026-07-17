@@ -2,6 +2,7 @@ node_modules/
 .browser-profile/
 .player-cache.json
 .daily-stats.json
+.stats-history.json
 .reports.json
 config.json
 npm-debug.log*

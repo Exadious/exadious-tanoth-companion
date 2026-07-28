@@ -2,6 +2,28 @@
 
 All notable changes to Exadious Tanoth Companion are documented in this file.
 
+## [1.3.0] - 2026-07-28
+
+### Added
+
+- Added manual inventory-item equipping from the dashboard, including equipped-item comparisons in inventory tooltips.
+- Added an equipment safety option that prevents swaps from creating or worsening negative total attributes and prioritizes repairs for existing negative totals.
+- Added automatic runtime recovery for expired game sessions through the stored Gameforge lobby session.
+
+### Changed
+
+- Reordered bot actions to prioritize likely winnable dungeon/card battles, followed by adventures, PvP, and work.
+- Made the adventure routine wait until the next day after the daily adventure limit is reached.
+- Improved PvP deferral so stale task information no longer blocks fights indefinitely.
+- Improved resource retrieval with a player-data fallback when the lightweight update response omits gold or bloodstones.
+
+### Fixed
+
+- Fixed repeated `NaN` attribute-cost and resource errors after a game session expired.
+- Fixed attribute routines continuing after invalid or unavailable cost data.
+- Fixed dungeon availability checks that could miss valid opponents when the server omitted optional comparison fields.
+- Suppressed harmless browser audio, WebGL, and unresolved optional-resource warnings from the dashboard log.
+
 ## [1.2.0] - 2026-07-17
 
 ### Added

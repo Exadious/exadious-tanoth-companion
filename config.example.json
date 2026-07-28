@@ -21,6 +21,7 @@
     "autoEquipCompanionPriorities": [],
     "autoEquipCompanionMaxMalus": 0,
     "autoEquipCompanionProfiles": {},
+    "autoEquipPreventNegativeTotals": false,
     "enablePvp": false,
     "pvpLimitType": "both",
     "pvpMaxRankDifference": 5,

@@ -49,6 +49,7 @@ config.bot.difficultyFallback ??= false;
 // installations receive the explicit, safer false value from config.example.
 config.bot.pvpForcedFightEnabled ??= true;
 config.bot.discordWeeklyStatsEnabled ??= false;
+config.bot.autoEquipPreventNegativeTotals ??= false;
 delete config.bot.pvpMaxLevelDifference;
 let cachedPlayer = {};
 try { cachedPlayer = JSON.parse(fs.readFileSync(playerCachePath, 'utf8')); } catch {}
@@ -131,6 +132,7 @@ const allowedBotSettings = {
   autoEquipCompanionPriorities: value => Array.isArray(value) && value.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute)),
   autoEquipCompanionMaxMalus: value => Number.isInteger(value) && value >= 0,
   autoEquipCompanionProfiles: value => value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([id, profile]) => /^\d+$/.test(id) && profile && Array.isArray(profile.priorities) && profile.priorities.every(attribute => ['STR', 'DEX', 'CON', 'INT'].includes(attribute)) && Number.isInteger(profile.maxMalus) && profile.maxMalus >= 0),
+  autoEquipPreventNegativeTotals: value => typeof value === 'boolean',
   enablePvp: value => typeof value === 'boolean',
   pvpLimitType: value => ['rank', 'level', 'both'].includes(value),
   pvpMaxRankDifference: value => Number.isInteger(value) && value >= 0,
@@ -170,6 +172,7 @@ let lastStatsTick = Date.now();
 let context;
 let page;
 let botFrame;
+let sessionRecoveryPromise = null;
 let discordSendChain = Promise.resolve();
 const discordNotificationDedup = new Map();
 
@@ -567,7 +570,9 @@ function isHiddenBrowserMessage(message) {
     /^Starting bot process/i,
     /^\[\.WebGL-/i,
     /GL Driver Message/i,
-    /GPU stall due to ReadPixels/i
+    /GPU stall due to ReadPixels/i,
+    /The AudioContext encountered an error from the audio device or the WebAudio renderer/i,
+    /Failed to load resource:\s*net::ERR_NAME_NOT_RESOLVED/i
   ].some(pattern => pattern.test(message.trim()));
 }
 
@@ -588,6 +593,10 @@ async function ensureBrowser() {
   await context.exposeFunction('__tanothStatus', payload => update(payload));
   await context.exposeFunction('__tanothGetDailyStats', () => ({ ...state.dailyStats }));
   await context.exposeFunction('__tanothGetReports', () => ({ ...state.reports }));
+  await context.exposeFunction('__tanothSessionExpired', () => {
+    recoverExpiredGameSession().catch(error => log(`Automatische Sitzungserneuerung fehlgeschlagen: ${error.message}`));
+    return true;
+  });
   const wirePage = currentPage => {
     currentPage.on('console', msg => {
       const message = msg.text();
@@ -676,7 +685,31 @@ async function launchGameFromLobby() {
   return false;
 }
 
-async function startBot() {
+async function recoverExpiredGameSession() {
+  if (sessionRecoveryPromise) return sessionRecoveryPromise;
+  sessionRecoveryPromise = (async () => {
+    log('Abgelaufene Spielsession erkannt; eine neue Sitzung wird über die gespeicherte Lobby-Anmeldung angefordert.');
+    update({ mode: 'online', message: 'Spielsitzung wird automatisch erneuert' });
+    if (botFrame) await botFrame.evaluate(() => { window.__TANOTH_STOP__ = true; }).catch(() => {});
+    botFrame = null;
+    const currentPage = page && !page.isClosed() ? page : await ensureBrowser();
+    const lobbyLocale = { 'de-DE': 'de_DE', 'en-EN': 'en_GB', 'fr-FR': 'fr_FR', 'es-ES': 'es_ES' }[config.uiLocale] || 'en_GB';
+    await currentPage.goto(`https://lobby.tanoth.gameforge.com/${lobbyLocale}/accounts`, {
+      waitUntil: 'domcontentloaded', timeout: 60000
+    });
+    const launched = await launchGameFromLobby();
+    if (!launched) {
+      update({ mode: 'offline', message: 'Lobby-Charakter konnte nicht automatisch gestartet werden – npm run login erneut ausführen' });
+      return false;
+    }
+    update({ mode: 'online', message: 'Neue Spielsitzung wird geprüft' });
+    await startBot({ allowSessionRecovery: false });
+    return true;
+  })().finally(() => { sessionRecoveryPromise = null; });
+  return sessionRecoveryPromise;
+}
+
+async function startBot({ allowSessionRecovery = true } = {}) {
   try {
     const currentPage = await ensureBrowser();
     botFrame = await findClientFrame(5000);
@@ -725,6 +758,7 @@ async function startBot() {
         log(`Spielerdaten sind leer (${reason}). Automatischer Neuversuch läuft.`);
         if (details.error === 'no_valid_session') {
           update({ mode: 'offline', message: 'Browser-Sitzung abgelaufen – npm run login erneut ausführen' });
+          if (allowSessionRecovery) return recoverExpiredGameSession();
         } else {
           update({ message: 'Spielerdaten werden erneut abgerufen' });
         }
@@ -849,6 +883,22 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify(result));
     } catch (error) {
       res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ error: error.message }));
+    }
+  }
+  if (req.method === 'POST' && req.url === '/api/equip-item') {
+    try {
+      if (!botFrame) throw new Error('Bot und Spielsitzung müssen aktiv sein');
+      const { instanceId } = await readJsonBody(req);
+      if (!Number.isInteger(instanceId) || instanceId <= 0) throw new Error('Ungültige Gegenstands-ID');
+      const result = await botFrame.evaluate(async id => {
+        if (typeof window.equipInventoryItem !== 'function') throw new Error('Ausrüstungsroutine ist nicht geladen');
+        return window.equipInventoryItem(id);
+      }, instanceId);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ error: error.message }));
     }
   }

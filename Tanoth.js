@@ -48,6 +48,7 @@ let botConfig = {
     autoEquipCompanionPriorities: [],
     autoEquipCompanionMaxMalus: 0,
     autoEquipCompanionProfiles: {},
+    autoEquipPreventNegativeTotals: false,
 
     // Automatic PvP never spends bloodstones to bypass the fight cooldown.
     enablePvp: false,
@@ -127,6 +128,18 @@ async function sleep(seconds) {
     while (Date.now() < end && !window.__TANOTH_STOP__) {
         await new Promise(resolve => setTimeout(resolve, Math.min(1000, end - Date.now())));
     }
+}
+
+function secondsUntilNextDay() {
+    const nextDay = new Date();
+    nextDay.setHours(24, 0, 2, 0);
+    return Math.max(1, Math.ceil((nextDay.getTime() - Date.now()) / 1000));
+}
+
+function isAdventureDailyLimitReached(adventureData) {
+    const completed = Number(adventureData?.adventuresMadeToday);
+    const limit = Number(adventureData?.freeAdventuresPerDay);
+    return Number.isFinite(completed) && Number.isFinite(limit) && limit > 0 && completed >= limit;
 }
 
 // Helper function to find value by name in a struct
@@ -246,7 +259,20 @@ async function getCurrentResources(){
     `;
     
     const xmlResourcesData = await fetchXmlData(botConfig.url, xmlGetResources);
-    const resources = parseResourcesXMLResponse(xmlResourcesData);
+    if (/no_valid_session/i.test(String(xmlResourcesData || ''))) {
+        requestRuntimeSessionRecovery('MiniUpdate');
+        return { gold: NaN, bloodstones: NaN, player: {} };
+    }
+    let resources = parseResourcesXMLResponse(xmlResourcesData);
+    if (!Number.isFinite(resources.gold) || !Number.isFinite(resources.bloodstones)) {
+        const attributesXml = await fetchXmlData(botConfig.url, `<methodCall><methodName>GetUserAttributes</methodName><params><param><value><string>${flashvars.sessionID}</string></value></param></params></methodCall>`);
+        const fallback = parseResourcesXMLResponse(attributesXml);
+        resources = {
+            gold: Number.isFinite(resources.gold) ? resources.gold : fallback.gold,
+            bloodstones: Number.isFinite(resources.bloodstones) ? resources.bloodstones : fallback.bloodstones,
+            player: { ...fallback.player, ...Object.fromEntries(Object.entries(resources.player || {}).filter(([, value]) => value !== null)) }
+        };
+    }
     // Keep the shared snapshot in sync. Several background routines (including
     // the work report) read this value after awaiting getCurrentResources().
     // Previously only the return value was current, so completed work could be
@@ -258,6 +284,19 @@ async function getCurrentResources(){
     if (Number.isFinite(resources.gold) && Number.isFinite(resources.bloodstones)) statusUpdate.message = 'Bot läuft';
     reportStatus(statusUpdate);
     return resources;
+}
+
+let runtimeSessionRecoveryRequested = false;
+
+function requestRuntimeSessionRecovery(source) {
+    if (runtimeSessionRecoveryRequested) return;
+    runtimeSessionRecoveryRequested = true;
+    window.__TANOTH_STOP__ = true;
+    reportStatus({ mode: 'offline', message: 'Spielsitzung wird automatisch erneuert' });
+    console.warn(`Game session expired during ${source}; requesting automatic lobby recovery.`);
+    if (typeof window.__tanothSessionExpired === 'function') {
+        Promise.resolve(window.__tanothSessionExpired()).catch(() => {});
+    }
 }
 
 async function proccessCurrentTaskRunning(){
@@ -615,6 +654,14 @@ async function processAdventure() {
         reportStatus({ player: { adventuresMade: data.adventuresMadeToday, adventureLimit: data.freeAdventuresPerDay } });
     }
 
+    // Dungeon/card battles have the highest priority. Defer starting a new
+    // adventure when a currently available opponent looks beatable.
+    if (!data.hasAnotherTaskRunning && await hasLikelyWinnableDungeonFight()) {
+        data.deferredForHigherPriority = true;
+        console.log('Adventure deferred: a likely winnable dungeon/card battle has priority.');
+        return data;
+    }
+
     // Check if we have remaining adventures
     if (data.hasAnotherTaskRunning) {
         data.hasAnotherTaskRunning = true;
@@ -932,6 +979,10 @@ window.fetchTanothPlayerData = async () => {
         <params><param><value><string>${flashvars.sessionID}</string></value></param></params>
     </methodCall>`;
     const xmlData = await fetchXmlData(botConfig.url, xmlGetAttributes);
+    const playerDiagnostics = diagnosePlayerAttributesXML(xmlData);
+    if (/no_valid_session/i.test(String(playerDiagnostics.error || playerDiagnostics.fault || ''))) {
+        requestRuntimeSessionRecovery('GetUserAttributes');
+    }
     const xmlGetEquipment = `<methodCall><methodName>GetEquipment</methodName><params><param><value><string>${flashvars.sessionID}</string></value></param></params></methodCall>`;
     const equipmentData = await fetchXmlData(botConfig.url, xmlGetEquipment);
     const equipmentDoc = new DOMParser().parseFromString(equipmentData || '', 'text/xml');
@@ -1165,7 +1216,7 @@ window.fetchTanothPlayerData = async () => {
     return {
         player,
         diagnostics: {
-            ...diagnosePlayerAttributesXML(xmlData),
+            ...playerDiagnostics,
             equipmentFields: equipmentFields.slice(0, 30),
             equipmentStructCount: itemStructs.length
         }
@@ -1287,26 +1338,66 @@ function equipmentAttributeValues(item) {
     return values;
 }
 
-function rateEquipmentUpgrade(candidate, equipped, priorities, maxMalus) {
+function equipmentOwnerTotals(owner) {
+    const total = value => value === null || value === undefined || value === '' ? NaN : Number(value);
+    return {
+        STR: total(owner?.totalStrength),
+        DEX: total(owner?.totalDexterity),
+        CON: total(owner?.totalConstitution),
+        INT: total(owner?.totalIntelligence)
+    };
+}
+
+function rateEquipmentUpgrade(candidate, equipped, priorities, maxMalus, ownerTotals, preventNegativeTotals) {
     const selected = [...new Set(Array.isArray(priorities) ? priorities : [])]
         .filter(code => ['STR', 'DEX', 'CON', 'INT'].includes(code));
-    if (!selected.length || !candidate || candidate.type !== equipped?.type && equipped) return null;
+    if (!candidate || candidate.type !== equipped?.type && equipped) return null;
 
     const candidateValues = equipmentAttributeValues(candidate);
     const equippedValues = equipmentAttributeValues(equipped);
     const allowedMalus = Math.max(0, Number(maxMalus) || 0);
     const changes = Object.fromEntries(selected.map(code => [code, candidateValues[code] - equippedValues[code]]));
-    if (selected.some(code => changes[code] < -allowedMalus)) return null;
+    let recoveryScore = 0;
+    if (preventNegativeTotals) {
+        const allChanges = Object.fromEntries(['STR', 'DEX', 'CON', 'INT']
+            .map(code => [code, candidateValues[code] - equippedValues[code]]));
+        const knownTotals = Object.entries(allChanges)
+            .filter(([code]) => Number.isFinite(ownerTotals?.[code]));
+        const negativeTotals = knownTotals.filter(([code]) => ownerTotals[code] < 0);
+        const createsNegativeTotal = knownTotals.some(([code, change]) =>
+            ownerTotals[code] >= 0 && ownerTotals[code] + change < 0
+        );
+        const worsensNegativeTotal = negativeTotals.some(([code, change]) =>
+            ownerTotals[code] + change < ownerTotals[code]
+        );
+        if (createsNegativeTotal || worsensNegativeTotal) return null;
+        if (negativeTotals.length) {
+            const improvements = negativeTotals
+                .map(([code, change]) => Math.max(0, change))
+                .filter(value => value > 0);
+            if (!improvements.length) return null;
+            // Repairing an existing negative total takes precedence over the
+            // normal selected-attribute score. Multiple safe swaps may improve
+            // the value step by step until it reaches zero or above.
+            recoveryScore = 1000000 + improvements.reduce((sum, value) => sum + value, 0);
+        }
+    }
 
+    // Attribute-malus limits govern normal upgrades. During recovery they are
+    // deliberately secondary: a positive attribute may decrease, but the
+    // safety checks above still prevent it from becoming negative.
+    if (!recoveryScore && selected.some(code => changes[code] < -allowedMalus)) return null;
     const score = selected.reduce((sum, code) => sum + changes[code], 0);
+    if (recoveryScore) return { score: recoveryScore + score, changes, repairsNegativeTotal: true };
+    if (!selected.length) return null;
     if (score <= 0) return null;
     return { score, changes };
 }
 
-function bestUpgradeForType(inventoryItems, equippedItem, type, priorities, maxMalus) {
+function bestUpgradeForType(inventoryItems, equippedItem, type, priorities, maxMalus, ownerTotals, preventNegativeTotals) {
     return inventoryItems
         .filter(item => isSellableInventoryItem(item) && item.type === type)
-        .map(item => ({ item, rating: rateEquipmentUpgrade(item, equippedItem, priorities, maxMalus) }))
+        .map(item => ({ item, rating: rateEquipmentUpgrade(item, equippedItem, priorities, maxMalus, ownerTotals, preventNegativeTotals) }))
         .filter(entry => entry.rating)
         .sort((left, right) => right.rating.score - left.rating.score || right.item.sellValue - left.item.sellValue)[0] || null;
 }
@@ -1330,6 +1421,25 @@ async function moveInventoryItemToPlayer(item) {
     throwOnXmlRpcFault(response, 'MoveItem');
 }
 
+window.equipInventoryItem = async instanceId => {
+    const numericId = Number(instanceId);
+    if (!Number.isInteger(numericId) || numericId <= 0) throw new Error('Ungültige Gegenstands-ID');
+    const snapshot = await window.fetchTanothPlayerData();
+    const item = (snapshot?.player?.inventoryItems || []).find(candidate => Number(candidate.instanceId) === numericId);
+    if (!item) throw new Error('Gegenstand wurde nicht im Spielerinventar gefunden');
+    await moveInventoryItemToPlayer(item);
+    reportStatus({ statsEvent: {
+        playerItemsEquipped: 1,
+        successfulActions: 1,
+        lastSuccessfulAction: `${item.name || 'Gegenstand'} manuell ausgerüstet`
+    } });
+    console.log(`Manual equipment: equipped ${item.name || numericId} for player.`);
+    await sleep(0.5);
+    const updated = await window.fetchTanothPlayerData();
+    await getCurrentResources().catch(() => null);
+    return { equipped: true, item: item.name || null, player: updated?.player || null };
+};
+
 async function moveInventoryItemToCompanion(item, companionIndex) {
     const request = `<methodCall><methodName>MoveCompanionItem</methodName><params>` +
         `<param><value><string>${flashvars.sessionID}</string></value></param>` +
@@ -1344,16 +1454,20 @@ async function moveInventoryItemToCompanion(item, companionIndex) {
 
 async function equipBestItemsForPlayer(snapshot) {
     const priorities = botConfig.autoEquipPlayerPriorities;
-    if (!botConfig.autoEquipPlayer || !Array.isArray(priorities) || !priorities.length) return snapshot;
+    if (!botConfig.autoEquipPlayer || !Array.isArray(priorities) ||
+        (!priorities.length && !botConfig.autoEquipPreventNegativeTotals)) return snapshot;
 
     for (let type = 1; type <= 8 && !window.__TANOTH_STOP__; type++) {
         const player = snapshot?.player;
         const equipped = (player?.equipment || []).find(item => item.type === type) || null;
-        const upgrade = bestUpgradeForType(player?.inventoryItems || [], equipped, type, priorities, botConfig.autoEquipPlayerMaxMalus);
+        const upgrade = bestUpgradeForType(
+            player?.inventoryItems || [], equipped, type, priorities, botConfig.autoEquipPlayerMaxMalus,
+            equipmentOwnerTotals(player), botConfig.autoEquipPreventNegativeTotals
+        );
         if (!upgrade) continue;
         await moveInventoryItemToPlayer(upgrade.item);
         reportStatus({ statsEvent: { playerItemsEquipped: 1, successfulActions: 1, lastSuccessfulAction: 'Spielerausrüstung verbessert' } });
-        console.log(`Automatic equipment: equipped ${upgrade.item.name} for player (${upgrade.rating.score >= 0 ? '+' : ''}${upgrade.rating.score}).`);
+        console.log(`Automatic equipment: equipped ${upgrade.item.name} for player (${upgrade.rating.repairsNegativeTotal ? 'negative total improved' : `${upgrade.rating.score >= 0 ? '+' : ''}${upgrade.rating.score}`}).`);
         await sleep(0.5);
         snapshot = await window.fetchTanothPlayerData();
     }
@@ -1371,7 +1485,8 @@ async function equipBestItemsForCompanions(snapshot) {
             priorities: botConfig.autoEquipCompanionPriorities,
             maxMalus: botConfig.autoEquipCompanionMaxMalus
         };
-        if (!Array.isArray(profile.priorities) || !profile.priorities.length) continue;
+        if (!Array.isArray(profile.priorities) ||
+            (!profile.priorities.length && !botConfig.autoEquipPreventNegativeTotals)) continue;
 
         for (let type = 1; type <= 8 && !window.__TANOTH_STOP__; type++) {
             const companions = snapshot?.player?.companions || [];
@@ -1379,11 +1494,14 @@ async function equipBestItemsForCompanions(snapshot) {
             if (companionIndex < 0) break;
             const companion = companions[companionIndex];
             const equipped = (companion.equipment || []).find(item => item.type === type) || null;
-            const upgrade = bestUpgradeForType(snapshot?.player?.inventoryItems || [], equipped, type, profile.priorities, profile.maxMalus);
+            const upgrade = bestUpgradeForType(
+                snapshot?.player?.inventoryItems || [], equipped, type, profile.priorities, profile.maxMalus,
+                equipmentOwnerTotals(companion), botConfig.autoEquipPreventNegativeTotals
+            );
             if (!upgrade) continue;
             await moveInventoryItemToCompanion(upgrade.item, companionIndex + 1);
             reportStatus({ statsEvent: { companionItemsEquipped: 1, successfulActions: 1, lastSuccessfulAction: `Ausrüstung von ${companion.name} verbessert` } });
-            console.log(`Automatic equipment: equipped ${upgrade.item.name} for ${companion.name} (${upgrade.rating.score >= 0 ? '+' : ''}${upgrade.rating.score}).`);
+            console.log(`Automatic equipment: equipped ${upgrade.item.name} for ${companion.name} (${upgrade.rating.repairsNegativeTotal ? 'negative total improved' : `${upgrade.rating.score >= 0 ? '+' : ''}${upgrade.rating.score}`}).`);
             await sleep(0.5);
             snapshot = await window.fetchTanothPlayerData();
         }
@@ -1663,6 +1781,37 @@ async function processAutomaticPvp({ ignoreLimits = false } = {}) {
     if (!botConfig.enablePvp || automaticPvpInProgress || window.__TANOTH_STOP__) return null;
     automaticPvpInProgress = true;
     try {
+        if (await hasLikelyWinnableDungeonFight()) {
+            console.log('Automatic PvP deferred: a likely winnable dungeon/card battle has priority.');
+            return null;
+        }
+        const adventureResponse = await fetchXmlData(botConfig.url, xmlGetAdventures);
+        const adventureData = parseAdventureXMLResponse(adventureResponse);
+        const resources = await getCurrentResources();
+        let activeAdventureTask = false;
+        if (adventureData.hasAnotherTaskRunning) {
+            const task = await proccessCurrentTaskRunning().catch(() => ({ timeTask: NaN, typeTask: '' }));
+            const taskType = String(task.typeTask || '').toLowerCase();
+            activeAdventureTask = Number.isFinite(Number(task.timeTask)) && Number(task.timeTask) > 0 &&
+                (taskType.includes('adventure') || taskType.includes('abenteuer'));
+            if (!activeAdventureTask && !Number.isFinite(Number(task.timeTask))) {
+                // A missing duration can be a short transition. Only preserve a
+                // recently announced future task; stale dashboard tasks must not
+                // suppress PvP forever.
+                const statusTaskEndAt = Number(readPendingAdventure()?.endsAt || 0);
+                activeAdventureTask = statusTaskEndAt > Date.now();
+            }
+            if (!activeAdventureTask) {
+                reportStatus({ player: { currentTask: 'Bereit', taskEndAt: null } });
+            }
+        }
+        const selectableAdventureAvailable = adventureData.hasRemainingAdventures && adventureData.adventures.length > 0;
+        const paidAdventureAvailable = adventureData.adventures.length > 0 && botConfig.useBloodstones &&
+            Number(resources.bloodstones) > Number(botConfig.minBloodstonesToSpend || 0);
+        if (activeAdventureTask || selectableAdventureAvailable || paidAdventureAvailable) {
+            console.log('Automatic PvP deferred: an active or available adventure has priority.');
+            return null;
+        }
         const snapshot = await window.fetchTanothPlayerData();
         const player = snapshot?.player || {};
         let opponents = await getPvpOpponents();
@@ -1773,6 +1922,63 @@ async function automaticPvpLoop() {
 
 let automaticDungeonInProgress = false;
 
+function dungeonOpponentAvailable(dungeon) {
+    const opponentId = finiteNumberFrom(dungeon, ['opp_name_id']);
+    const opponentPicture = finiteNumberFrom(dungeon, ['opp_pic_id']);
+    return (Number.isFinite(opponentId) && opponentId >= 0) ||
+        (Number.isFinite(opponentPicture) && opponentPicture >= 0);
+}
+
+function dungeonLooksWinnable(dungeon, player) {
+    const opponentPower = finiteNumberFrom(dungeon, ['opp_fight_power', 'opponent_fight_power', 'fight_power']);
+    const playerPower = finiteNumberFrom(player || {}, ['fightPower', 'fight_power']);
+    if (Number.isFinite(opponentPower) && Number.isFinite(playerPower)) return opponentPower <= playerPower;
+
+    const opponentLevel = finiteNumberFrom(dungeon, ['opp_level', 'opponent_level', 'dungeon_level', 'level']);
+    const playerLevel = finiteNumberFrom(player || {}, ['level']);
+    if (Number.isFinite(opponentLevel) && Number.isFinite(playerLevel)) return opponentLevel <= playerLevel;
+
+    // Some server responses do not expose comparison values. Keep the
+    // previously working behavior in that case instead of suppressing every
+    // dungeon fight solely because the server omitted the fields.
+    return true;
+}
+
+async function getDungeonAvailability() {
+    if (!botConfig.enableDungeon) return { available: false, likelyWinnable: false };
+    const response = await callDungeonMethod('GetDungeon');
+    const dungeon = response.answer || response;
+    const completed = finiteNumberFrom(dungeon, ['dungeon_made_today']) || 0;
+    const freeTries = finiteNumberFrom(dungeon, ['free_tries_today']) || 0;
+    const hasFreeTry = completed < freeTries;
+    if (!dungeonOpponentAvailable(dungeon)) return { available: false, likelyWinnable: false, dungeon, hasFreeTry };
+    if (!hasFreeTry) {
+        if (!botConfig.dungeonUseBloodstones) return { available: false, likelyWinnable: false, dungeon, hasFreeTry };
+        const resources = await getCurrentResources();
+        if (Number(resources.bloodstones) - 1 < Number(botConfig.dungeonMinBloodstones || 0)) {
+            return { available: false, likelyWinnable: false, dungeon, hasFreeTry };
+        }
+    }
+    const snapshot = await window.fetchTanothPlayerData().catch(() => null);
+    return {
+        available: true,
+        likelyWinnable: dungeonLooksWinnable(dungeon, snapshot?.player || {}),
+        dungeon,
+        hasFreeTry
+    };
+}
+
+async function hasLikelyWinnableDungeonFight() {
+    if (!botConfig.enableDungeon || automaticDungeonInProgress) return automaticDungeonInProgress;
+    try {
+        const availability = await getDungeonAvailability();
+        return availability.available && availability.likelyWinnable;
+    } catch (error) {
+        console.warn('Could not check dungeon priority:', error);
+        return false;
+    }
+}
+
 async function callDungeonMethod(methodName) {
     const request = `<methodCall><methodName>${methodName}</methodName><params>` +
         `<param><value><string>${flashvars.sessionID}</string></value></param>` +
@@ -1789,19 +1995,14 @@ async function processAutomaticDungeon() {
     if (!botConfig.enableDungeon || automaticDungeonInProgress || window.__TANOTH_STOP__) return;
     automaticDungeonInProgress = true;
     try {
-        const response = await callDungeonMethod('GetDungeon');
-        const dungeon = response.answer || response;
-        const completed = finiteNumberFrom(dungeon, ['dungeon_made_today']) || 0;
-        const freeTries = finiteNumberFrom(dungeon, ['free_tries_today']) || 0;
-        const hasFreeTry = completed < freeTries;
-        if (!hasFreeTry) {
-            if (!botConfig.dungeonUseBloodstones) return;
-            await getCurrentResources();
-            if (currentResources.bloodstones - 1 < Number(botConfig.dungeonMinBloodstones || 0)) return;
+        const availability = await getDungeonAvailability();
+        if (!availability.available) return false;
+        const { dungeon, hasFreeTry } = availability;
+        if (!availability.likelyWinnable) {
+            console.log('Automatic dungeon: opponent is stronger than the player; preserving the attempt for a more likely win.');
+            return false;
         }
         const opponentId = finiteNumberFrom(dungeon, ['opp_name_id']);
-        const opponentPicture = finiteNumberFrom(dungeon, ['opp_pic_id']);
-        if ((!Number.isFinite(opponentId) || opponentId < 0) && (!Number.isFinite(opponentPicture) || opponentPicture < 0)) return;
         const resultResponse = await callDungeonMethod('StartDungeon');
         const result = resultResponse.answer || resultResponse;
         const report = createCombatReport({
@@ -1822,6 +2023,7 @@ async function processAutomaticDungeon() {
         });
         console.log(`Automatic dungeon battle completed (level ${report.dungeonLevel ?? '?'}${hasFreeTry ? ', free attempt' : ', bloodstone attempt'}).`);
         await Promise.all([window.fetchTanothPlayerData(), getCurrentResources()]);
+        return true;
     } catch (error) {
         console.error('Automatic dungeon failed:', error);
     } finally {
@@ -1872,20 +2074,9 @@ function scheduleAutomaticWorkForMidnight(hours) {
 }
 
 async function hasAvailableDungeonFight() {
-    if (!botConfig.enableDungeon || automaticDungeonInProgress) return automaticDungeonInProgress;
-    const response = await callDungeonMethod('GetDungeon');
-    const dungeon = response.answer || response;
-    const completed = finiteNumberFrom(dungeon, ['dungeon_made_today']) || 0;
-    const freeTries = finiteNumberFrom(dungeon, ['free_tries_today']) || 0;
-    const hasFreeTry = completed < freeTries;
-    const opponentId = finiteNumberFrom(dungeon, ['opp_name_id']);
-    const opponentPicture = finiteNumberFrom(dungeon, ['opp_pic_id']);
-    const hasOpponent = (Number.isFinite(opponentId) && opponentId >= 0) || (Number.isFinite(opponentPicture) && opponentPicture >= 0);
-    if (!hasOpponent) return false;
-    if (hasFreeTry) return true;
-    if (!botConfig.dungeonUseBloodstones) return false;
-    const resources = await getCurrentResources();
-    return Number(resources.bloodstones) - 1 >= Number(botConfig.dungeonMinBloodstones || 0);
+    if (automaticDungeonInProgress) return true;
+    const availability = await getDungeonAvailability();
+    return availability.available && availability.likelyWinnable;
 }
 
 async function startWork(hours) {
@@ -2071,11 +2262,11 @@ async function processAttributes() {
     
     while (1) {
         try {
-            console.log('Cost values:', costValues);
-            if (costValues.STR === null) {
-                console.log('Error fetching attribute costs. Exiting attribute process.');
+            if (!Object.values(costValues).every(Number.isFinite)) {
+                console.log('Attribute costs are unavailable; skipping attribute process.');
                 break;
             }
+            console.log('Cost values:', costValues);
             
             let selectedAttribute = botConfig.priorityAttribute;
 
@@ -2172,6 +2363,10 @@ async function runBot() {
 
             console.log('Starting new adventure cycle...');
             const adventureData = await processAdventure();
+            if (adventureData.deferredForHigherPriority) {
+                await sleep(5);
+                continue;
+            }
             if (adventureData.hasAnotherTaskRunning) {
                 console.log(`Another task is running: ${adventureData.taskRunning.typeTask}`);
                 // Check if task time have NaN value
@@ -2230,8 +2425,15 @@ async function runBot() {
 
 
             }else if (!adventureData.hasRemainingAdventures && (!botConfig.useBloodstones || (currentResources.bloodstones <= botConfig.minBloodstonesToSpend))) {
-                console.log('No more adventures available. Waiting 20 minutes for next cycle...');
-                await sleep(20 * 60);
+                if (isAdventureDailyLimitReached(adventureData)) {
+                    const waitSeconds = secondsUntilNextDay();
+                    const nextCycleAt = new Date(Date.now() + waitSeconds * 1000);
+                    console.log(`Daily adventure limit reached (${adventureData.adventuresMadeToday}/${adventureData.freeAdventuresPerDay}). Waiting until ${nextCycleAt.toLocaleString()}...`);
+                    await sleep(waitSeconds);
+                } else {
+                    console.log('No adventures currently available. Waiting 20 minutes for next cycle...');
+                    await sleep(20 * 60);
+                }
 
             }
         }

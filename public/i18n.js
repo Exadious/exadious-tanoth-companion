@@ -162,7 +162,11 @@
     ["Monat","Month","Mois","Mes"],
     ["Gesamte Laufzeit","All time","Toute la période","Todo el tiempo"],
     ["Bei einem Grenzwert von 57 werden alle Gegner bis einschließlich Level 56 berücksichtigt. Der optionale erzwungene Kampf ignoriert Level und Rang.","With a limit of 57, opponents up to level 56 are considered. The optional forced battle ignores level and rank.","Avec une limite de 57, les adversaires jusqu’au niveau 56 sont pris en compte. Le combat forcé facultatif ignore le niveau et le rang.","Con un límite de 57, se consideran oponentes hasta el nivel 56. El combate forzado opcional ignora el nivel y el rango."],
-    ["Priorität der Gildenausbauten","Guild upgrade priority","Priorité des améliorations de guilde","Prioridad de mejoras del gremio"]
+    ["Priorität der Gildenausbauten","Guild upgrade priority","Priorité des améliorations de guilde","Prioridad de mejoras del gremio"],
+    ["Keine negativen Gesamtwerte durch Ausrüstungswechsel zulassen","Do not allow negative total attributes after equipment changes","Ne pas autoriser de caractéristiques totales négatives après un changement d’équipement","No permitir atributos totales negativos tras cambiar el equipo"],
+    ["Der Wechsel wird verworfen, wenn Stärke, Geschick, Konstitution oder Intelligenz danach unter 0 liegen würde.","The change is rejected if strength, dexterity, constitution, or intelligence would fall below 0.","Le changement est rejeté si la force, la dextérité, la constitution ou l’intelligence devient inférieure à 0.","El cambio se rechaza si la fuerza, la destreza, la constitución o la inteligencia quedaría por debajo de 0."]
+    ,
+    ["Bestehende negative Gesamtwerte werden vorrangig und schrittweise verbessert. Kein anderer Gesamtwert darf dabei negativ werden oder weiter sinken.","Existing negative totals are improved first and step by step. No other total may become negative or decrease further.","Les totaux négatifs existants sont améliorés en priorité et progressivement. Aucun autre total ne peut devenir négatif ni diminuer davantage.","Los totales negativos existentes se mejoran primero y paso a paso. Ningún otro total puede volverse negativo ni disminuir más."]
   ];
   let current = 'en-EN';
   let translating = false;
